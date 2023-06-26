@@ -1,0 +1,13 @@
+
+# Devenv
+.devenv*
+devenv.local.nix
+.direnv/**/*
+# generated
+static/tw.css
+result*
+result-*/
+
+# Added by cargo
+
+/target

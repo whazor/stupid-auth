@@ -1,0 +1,36 @@
+image:
+  repository: docker.io/jmalloc/echo-server
+  tag: 0.3.5
+env:
+  TZ: Europe/Amsterdam
+service:
+  main:
+    ports:
+      http:
+        port: 8080
+ingress:
+  main:
+    enabled: true
+    annotations:
+      external-dns.home.arpa/enabled: "true"
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+      nginx.ingress.kubernetes.io/auth-method: GET
+      nginx.ingress.kubernetes.io/auth-url: http://stupid-auth.default.svc.cluster.local:8000/auth
+      nginx.ingress.kubernetes.io/auth-signin: "https://stupid-auth.example.com/login?rd=$scheme://$best_http_host$request_uri"
+      nginx.ingress.kubernetes.io/auth-response-headers: Remote-User,Remote-Name,Remote-Groups,Remote-Email
+      nginx.ingress.kubernetes.io/auth-snippet: proxy_set_header X-Forwarded-Method $request_method;
+    hosts:
+    - host: test-app.example.com
+      paths:
+      - path: /
+        pathType: Prefix
+    tls:
+      - hosts:
+        - test-app.example.com
+        secretName: test-app-tls
+resources:
+  requests:
+    cpu: 10m
+    memory: 50Mi
+  limits:
+    memory: 500Mi

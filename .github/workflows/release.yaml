@@ -1,0 +1,26 @@
+name: release
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v3
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      # - run: nix flake check --impure
+      - run: nix build .#docker
+      - run: nix run .#publish-docker
+        env:
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"

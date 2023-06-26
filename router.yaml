@@ -1,0 +1,33 @@
+
+http:
+  routers:
+    router0:
+      entryPoints:
+      - web
+      service: service-example
+      rule: "host(`localhost`)"
+      middlewares:
+      - rewriteHeader
+      - stupidAuth
+      # rule: host(`foo.bar.de`)
+      # tls:
+      #   cert-resolver: default
+
+  services:
+    service-example:
+      loadBalancer:
+        servers:
+        - url: https://example.com/
+          # overwrite host header
+
+  middlewares:
+    rewriteHeader:
+      headers:
+        customRequestHeaders:
+          Host: "example.com"
+        # customResponseHeaders:
+        #   X-Custom-Response-Header: "value"
+    stupidAuth:
+      forwardAuth:
+        address: "http://localhost:8000/auth"
+        trustForwardHeader: true

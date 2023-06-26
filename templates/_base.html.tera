@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-white">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=, initial-scale=1.0">
+    <title>StupidAuth {% block title %}{% endblock %}</title>
+    <link rel="stylesheet" type="text/css" href="public/tw.css?{{ hash_public(name='tw.css') }}" />
+
+</head>
+<body class="h-full">
+    <div class="flex min-h-full flex-col justify-center px-6 py-12 lg:px-8">
+        <div class="sm:mx-auto sm:w-full sm:max-w-sm">
+          <h1 class="mt-6 text-center text-4xl font-extralight drop-shadow-sm font-serif leading-9 text-gray-900">
+            StupidAuth
+          </h1>
+        </div>
+        {% block content %}{% endblock %}
+      </div>
+</body>
+</html>
