@@ -4,6 +4,8 @@
 
 This is a simple authentication server that uses secure cookies to authenticate users. It is meant for home lab use and is not meant to be used in production.
 
+Currently, it only supports forward auth from NGINX, and can be used to add authentication to services that do not support auth, or support auth via header.
+
 ## Is this secure?
 
 Every authentication system makes different tradeoffs. This system is designed to be easy to use and secure enough for home lab use.
