@@ -1,9 +1,10 @@
 #[macro_use]
 extern crate rocket;
 use log::info;
-use rocket::State;
+use rocket::fairing::AdHoc;
 use rocket::figment::providers::{Env, Serialized};
 use rocket::http::ContentType;
+use rocket::State;
 use rocket::{
     form::Form,
     http::Status,
@@ -11,7 +12,6 @@ use rocket::{
     response::Redirect,
     Request, Response,
 };
-use rocket::fairing::AdHoc;
 use rocket_dyn_templates::tera::Result as TeraResult;
 use rocket_dyn_templates::{context, tera::Value, Template};
 
@@ -23,8 +23,8 @@ use serde::{Deserialize, Serialize};
 use serde_yaml::{from_str, to_string};
 
 use std::collections::HashSet;
+use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicU32};
 use std::{collections::HashMap, fs, thread, time};
 
 #[cfg(test)]
@@ -47,9 +47,12 @@ fn index() -> &'static str {
 
 #[get("/tutorial")]
 fn tutorial() -> Template {
-    Template::render("tutorial.html", context! {
-        post_url: uri!(tutorial_genconfig())
-    })
+    Template::render(
+        "tutorial.html",
+        context! {
+            post_url: uri!(tutorial_genconfig())
+        },
+    )
 }
 
 #[post("/tutorial", data = "<user>")]
@@ -108,11 +111,12 @@ fn login(rd: Option<String>, error: bool, cookies: &CookieJar<'_>) -> Template {
 
 #[post("/login?<rd>", data = "<user>")]
 fn login_post(
-    rd: Option<String>, 
-    user: Form<User>, 
-    cookies: &CookieJar<'_>, 
-    config: &State<AppConfig>, 
-    sessions: &State<SessionState>) -> Redirect {
+    rd: Option<String>,
+    user: Form<User>,
+    cookies: &CookieJar<'_>,
+    config: &State<AppConfig>,
+    sessions: &State<SessionState>,
+) -> Redirect {
     info!("login post, return URL: {:?}", rd);
     // check csrf token
     let csrf_token = cookies.get_private("csrf_token");
@@ -146,16 +150,18 @@ fn login_post(
         return Redirect::to(uri!(login(rd = rd, error = true)));
     }
 
-    // increase session id    
-    let session_id = sessions.last.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    // increase session id
+    let session_id = sessions
+        .last
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     // add session id to session
     sessions.store.lock().unwrap().insert(session_id);
 
     let found = UserWithSessionID {
         user: found.unwrap(),
-        session_id: session_id,
+        session_id,
     };
-    
+
     cookies.add_private(
         rocket::http::Cookie::build("stupid_auth_user", to_string(&found).unwrap())
             .secure(true)
@@ -280,7 +286,7 @@ impl Default for AppConfig {
 
 struct SessionState {
     last: AtomicU32,
-    store: Arc<Mutex<HashSet<u32>>>
+    store: Arc<Mutex<HashSet<u32>>>,
 }
 
 #[launch]

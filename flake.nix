@@ -35,7 +35,8 @@
           manifest = (pkgs.lib.importTOML ./Cargo.toml).package;
           
           templatesFilter = path: _type: builtins.match ".*/templates/.*" path != null;
-          fullFilter = path: type: (templatesFilter path type) || (craneLib.filterCargoSources path type);
+          userYamlFilter = path: _type: builtins.match ".*/users.yaml" path != null;
+          fullFilter = path: type: (templatesFilter path type) || (craneLib.filterCargoSources path type) || (userYamlFilter path type);
           src = pkgs.lib.cleanSourceWith {
               src = craneLib.path ./.;
               filter = fullFilter;
@@ -46,7 +47,9 @@
             # MY_CUSTOM_VAR = "some value";
             TAILWIND_CSS = "${self'.packages.stupid-auth-css}/static/tw.css";
           };
-          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+          cargoArtifacts = craneLib.buildDepsOnly {
+            inherit src;
+          };
           stupid-auth-crate = craneLib.buildPackage (commonArgs // {
             # src = craneLib.cleanCargoSource (craneLib.path ./.);
             inherit cargoArtifacts;
@@ -67,16 +70,24 @@
           stupid-auth-crate-audit = craneMaxLib.cargoAudit (commonArgs // {
             inherit src advisory-db;
           });
-          stupid-auth-crate-nextest = craneMaxLib.cargoNextest (commonArgs // {
+          stupid-auth-crate-nextest = craneMaxLib.cargoNextest ({
+            src = pkgs.lib.cleanSourceWith {
+              src = craneMaxLib.path ./.;
+              filter = path: type: (fullFilter path type) || (userYamlFilter path type);
+            };
+          } // commonArgs // {
             inherit cargoArtifacts;
+            
             partitions = 1;
             partitionType = "count";
           });
-
         };
         
         packages.stupid-auth-css = pkgs.stdenv.mkDerivation {
-          src = ./.;
+          src = pkgs.lib.cleanSourceWith {
+              src = craneLib.path ./.;
+              filter = templatesFilter;
+          };
           name = "stupid-auth-css";
           buildInputs = [
             pkgs.nodePackages_latest.tailwindcss
@@ -90,35 +101,38 @@
           '';
         };
         packages.stupid-auth = stupid-auth-crate;
-        packages.docker = pkgs.dockerTools.buildImage {
+        packages.docker = pkgs.dockerTools.streamLayeredImage {
           name = "stupid-auth";
           tag = "latest";
-          copyToRoot = pkgs.buildEnv {
-            name = "image-root";
-              paths = [
-                self'.packages.stupid-auth
-                (pkgs.fakeNss.override {
-                  extraPasswdLines = [
-                    "kah:x:568:568::/home/kah:/bin/false"
-                  ];
-                  extraGroupLines = [
-                    "kah:x:568:"
-                  ];
-                })
-                (pkgs.runCommand "empty-templates" { } ''
-                  mkdir -p $out/tmp/templates
-                '')
-              ];
-          };
           config =  {
             Entrypoint = [ "stupid-auth" ];
+            Labels = {
+              "org.opencontainers.image.source" = "https://github.com/whazor/stupid-auth";
+              "org.opencontainers.image.description" = "A stupid authentication server";
+              "org.opencontainers.image.licenses" = "MIT";
+            };
           };
+          contents = [
+            stupid-auth-crate
+            (pkgs.fakeNss.override {
+              extraPasswdLines = [
+                "kah:x:568:568::/home/kah:/bin/false"
+              ];
+              extraGroupLines = [
+                "kah:x:568:"
+              ];
+            })
+            (pkgs.runCommand "empty-templates" { } ''
+              mkdir -p $out/tmp/templates
+            '')
+          ];
+
         };
         # we upload to ghcr.io from github actions
         packages.publish-docker = pkgs.writeScriptBin "publish-docker" ''
           #!${pkgs.runtimeShell}
           echo "$GITHUB_TOKEN" | skopeo login ghcr.io -u whazor --password-stdin
-          skopeo copy docker-archive:${self'.packages.docker} docker://ghcr.io/whazor/stupid-auth:${manifest.version}
+          ${self'.packages.docker} | gzip --fast | skopeo copy docker-archive:/dev/stdin docker://ghcr.io/whazor/stupid-auth:${manifest.version}
         '';
 
         devenv.shells.default = { config, ... }: {
@@ -170,10 +184,12 @@
           scripts.docker-run.exec = ''
           docker run --rm -it -p 8000:8000 stupid-auth:latest
           '';
+          scripts.docker-load.exec = ''
+          nix build .#docker && ./result | docker load && rm ./result
+          '';
 
           enterShell = ''
             mkdir -p $DEVENV_ROOT/static/
-            docker load -i ${self'.packages.docker}
           '';
 
           # https://devenv.sh/languages/

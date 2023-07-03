@@ -1,0 +1,3 @@
+users:
+- username: foo
+  password: $argon2id$v=19$m=19456,t=2,p=1$u5kPtGn2a/Py/B6tf26YUQ$GEI4nbr4F74BH/4Bi2Tf7o/r63LXDFclEdgAIsJuXB8
