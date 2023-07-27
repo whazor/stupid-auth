@@ -1,6 +1,7 @@
 use log::info;
 
 use rocket::State;
+use rocket::time::{OffsetDateTime, Duration};
 use rocket::{form::Form, response::Redirect};
 use rocket_dyn_templates::{context, Template};
 
@@ -19,7 +20,11 @@ use crate::passwd::check_password;
 
 // get referer
 #[get("/login?<rd>&<error>")]
-pub(crate) fn login(rd: Option<String>, error: bool, cookies: &CookieJar<'_>) -> Template {
+pub(crate) fn login(
+    rd: Option<String>, 
+    error: bool, 
+    cookies: &CookieJar<'_>,
+) -> Template {
     info!("showing login page, return URL: {:?}", rd);
     // setup csrf token
     let rng = rand::thread_rng();
@@ -28,7 +33,10 @@ pub(crate) fn login(rd: Option<String>, error: bool, cookies: &CookieJar<'_>) ->
         .take(32)
         .map(char::from)
         .collect();
-    cookies.add_private(rocket::http::Cookie::new("csrf_token", csrf_token.clone()));
+    let mut cookie = rocket::http::Cookie::new("csrf_token", csrf_token.clone());
+    let now = OffsetDateTime::now_utc();
+    cookie.set_expires(now + Duration::minutes(10));
+    cookies.add_private(cookie);
     Template::render(
         "login.html",
         context! {
@@ -91,11 +99,12 @@ pub(crate) fn login_post(
         user: found.unwrap(),
         session_id,
     };
-
+    
     cookies.add_private(
         rocket::http::Cookie::build("stupid_auth_user", to_string(&found).unwrap())
             .secure(true)
             .domain(config.domain.clone())
+            .expires(OffsetDateTime::now_utc() + Duration::days(config.cookie_expire.clone().into()))
             .finish(),
     );
     // redirect = rd if some and not empty, else "/"

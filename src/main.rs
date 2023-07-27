@@ -141,11 +141,14 @@ pub fn hash_public(args: &HashMap<String, Value>) -> TeraResult<Value> {
 #[derive(Debug, Deserialize, Serialize)]
 struct AppConfig {
     domain: String,
+    // cookie expire time is in amount of days
+    cookie_expire: u32,
 }
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             domain: "localhost".to_string(),
+            cookie_expire: 30,
         }
     }
 }
