@@ -32,12 +32,14 @@ persistence:
     subPath: users.yaml
     mountPath: /users.yaml
     readOnly: true
-podSecurityContext:
-  runAsUser: 568
-  runAsGroup: 568
-  fsGroup: 568
-  fsGroupChangePolicy: OnRootMismatch
-  supplementalGroups: [10000]
+# we disable the security context because we want to run as root
+# for live reloading
+# podSecurityContext:
+#   runAsUser: 568
+#   runAsGroup: 568
+#   fsGroup: 568
+#   fsGroupChangePolicy: OnRootMismatch
+  # supplementalGroups: [10000]
 resources:
   requests:
     cpu: 10m

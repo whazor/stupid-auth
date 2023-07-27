@@ -1,0 +1,66 @@
+{#
+<div class="bg-red-50 border-l-4 border-red-400 p-4">
+    <div class="flex">
+        <div class="flex-shrink-0">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                stroke="currentColor" class="w-6 h-6 text-red-400">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+            </svg>
+
+        </div>
+        <div class="ml-3">
+            <p class="text-sm text-red-700">
+                You need at least one factor to be able to login.
+            </p>
+        </div>
+    </div>
+</div> #}
+{% macro warning(message) %}
+<div class="bg-yellow-50 border-l-4 border-yellow-400 p-4">
+    <div class="flex">
+        <div class="flex-shrink-0">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                stroke="currentColor" class="w-6 h-6 text-yellow-400">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+            </svg>
+
+        </div>
+        <div class="ml-3">
+            <p class="text-sm leading-5 text-yellow-700">
+                {{ message }}
+            </p>
+        </div>
+    </div>
+</div>
+{% endmacro %}
+
+{% macro error(message) %}
+<div class="bg-red-50 border-l-4 border-red-400 p-4">
+    <div class="flex">
+        <div class="flex-shrink-0">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                stroke="currentColor" class="w-6 h-6 text-red-400">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+            </svg>
+
+        </div>
+        <div class="ml-3">
+            <p class="text-sm text-red-700">
+                {{ message }}
+            </p>
+        </div>
+    </div>
+</div>
+{% endmacro %}
+
+{% macro checkbox(name, label) %}
+{# <input type="checkbox" id="otp-check" name="otp-check" value="otp" class="peer/otp" onchange="formIsValid()" />
+<label for="otp-check" class="text-sm font-medium leading-6 text-gray-900">OTP</label> #}
+<input type="checkbox" id="{{ name }}-check" name="{{ name }}-check" value="{{ name }}" class="peer/{{ name }}"
+    onchange="formIsValid()" />
+<label for="{{ name }}-check" class="text-sm font-medium leading-6 text-gray-900
+peer-disabled/webauthn:text-gray-400 peer-disabled/webauthn:cursor-not-allowed">{{ label }}</label>
+{% endmacro %}

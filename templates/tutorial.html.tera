@@ -1,74 +1,158 @@
-{% extends "_base.html" %} 
-{% block title %}Tutorial{% endblock %} 
+{% extends "_base.html" %}
+{% block title %}Tutorial{% endblock %}
 {% block content%}
 
-<h2 class="mt-10 text-2xl font-bold leading-9 tracking-tight text-gray-900">
-  Tutorial
-</h2>
+<script>
+  const ccoPassKey = {{ ccr_passkey | safe }};
+  const ccoSecKey = {{ ccr_sec_key | safe }};
+  const regState = {{ reg_state | safe }};
+  const publicKeyCredentialCreationOptions =
+    (cco, username) => {
+      let res = structuredClone(cco);
+      res.publicKey.user.name = username;
+      res.publicKey.user.displayName = username;
+      res.publicKey.user.id = Uint8Array.from(cco.publicKey.user.id, c => c.charCodeAt(0))
+      res.publicKey.challenge = Uint8Array.from(cco.publicKey.challenge, c => c.charCodeAt(0))
+      return res;
+    };
+  const isSSL = window.location.protocol === "https:";
+  function start() {
+    if (isSSL === false) {
+      document.getElementById('webauthn').disabled = true;
+      document.getElementById('webauthn-check').disabled = true;
+      document.getElementById('webauthn-check').checked = false;
+    }
+    formIsValid();
+  }
+  async function credentialsCreate(kind) {
+    const username = document.getElementById('username').value || "{{ username }}";
+    const cco = kind === "passkey" ? ccoPassKey : ccoSecKey;
+    const credential = await navigator.credentials.create(publicKeyCredentialCreationOptions(cco, username));
+    const clientDataJSON = new TextDecoder('utf-8').decode(credential.response.clientDataJSON);
+    console.log(credential);
+    console.log(clientDataJSON)
+  }
 
-{# the idea is that the user generates their own config.yaml #}
-<p class="my-10 text-gray-800">
-  To get started, create a file named <code>config.yaml</code> in the application
+  function formIsValid() {
+    const username = document.getElementById('username').value;
+    const password = document.getElementById('password').value;
+    const passwordCheck = document.getElementById('password-check').checked;
+    const otp = document.getElementById('otp').value;
+    const otpCheck = document.getElementById('otp-check').checked;
+    const webauthn = document.getElementById('webauthn').value;
+    const webauthnCheck = document.getElementById('webauthn-check').checked;
+    const isValid =
+      // username always required
+      username.length > 0 &&
+      // at least one factor required
+      (passwordCheck || otpCheck || webauthnCheck) &&
+      // password required if passwordCheck
+      (passwordCheck ? password.length > 0 : true) &&
+      // otp required if otpCheck
+      (otpCheck ? otp.length > 0 : true) &&
+      // webauthn required if webauthnCheck
+      (webauthnCheck ? webauthn.length > 0 : true);
+    document.getElementById('submit').disabled = !isValid;
+  }
+</script>
+
+<div>
+  <h2 class="mt-10 text-2xl font-bold leading-9 tracking-tight text-gray-900">
+    Tutorial
+  </h2>
+  {# the idea is that the user generates their own config.yaml #}
+  <p class="my-10 text-gray-800">
+    To get started, create a file named <code>config.yaml</code> in the application
     root directory.
-</p>
+  </p>
 
-<p>
+  <p>
     Create your first user by filling in the following fields:
-</p>
+  </p>
 
-<form class="space-y-6" action="{{ post_url }}" method="POST">
-  <div>
-    <label
-      for="username"
-      class="block text-sm font-medium leading-6 text-gray-900"
-      >Username</label
-    >
-    <div class="mt-2">
-      <input
-        id="username"
-        name="username"
-        type="text"
-        autocomplete="username"
-        placeholder="admin"
-        class="block w-full rounded-md border-0 py-1.5 px-2 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6"
-      />
+  <form class="space-y-6" action="{{ post_url }}" method="POST">
+    <div class="m-6">
+      <label for="username" class="block text-sm font-medium leading-6 text-gray-900">Username</label>
+      <div class="mt-2">
+        <input id="username" name="username" value="{{ username }}" type="text" autocomplete="username"
+          onchange="formIsValid()" placeholder="admin"
+          class="block w-full rounded-md border-0 py-1.5 px-2 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6" />
+      </div>
     </div>
-  </div>
-  <div class="flex items-center justify-between">
-    <label
-      for="password"
-      class="block text-sm font-medium leading-6 text-gray-900"
-      >Password</label
-    >
-    {#
-    <div class="text-sm">
-      <a href="#" class="font-semibold text-indigo-600 hover:text-indigo-500"
-        >Forgot password?</a
-      >
-    </div>
-    #}
-  </div>
-  <div class="mt-2">
-    <input
-      id="password"
-      name="password"
-      type="password"
-      autocomplete="current-password"
-      required
-      class="block w-full rounded-md border-0 px-2 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6"
-    />
-  </div>
+    <div class="m-2 mt-10  border border-gray-200 p-4 rounded-md">
+      {# factors #}
+      <h4 class="text-2xl font-bold leading-9 tracking-tight text-gray-900">
+        Factors
+      </h4>
 
-  <div>
-    <button
-      type="submit"
-      class="flex w-full justify-center rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-semibold leading-6 text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
-    >
-      Generate
+      <p class="">
+        You can add multiple factors to your account. You need at least one
+        factor to be able to login. Note that passwordless login is also possible.
+      </p>
+
+      <fieldset>
+        {{ macros::checkbox(name='password', label='Password') }}
+        <div class="mt-2 hidden peer-checked/password:block">
+          <input id="password" name="password" type="password" value="{{ password }}" autocomplete="current-password"
+            onchange="formIsValid()"
+            class="block w-full rounded-md border-0 px-2 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6" />
+        </div>
+      </fieldset>
+
+      <div class="border-t border-gray-200 my-2"></div>
+
+      <fieldset>
+        {{ macros::checkbox(name='otp', label='OTP') }}
+        <div class="items-center justify-between hidden peer-checked/otp:block">
+          <span class="inline-block">
+            <img src="data:image/png;base64,{{ totp }}" class="w-1/2"
+              title="Scan this QR code with your authenticator app" />
+          </span>
+          <label for="otp" class="sr-only">OTP</label>
+          <input name="otp-secret" type="hidden" value="{{ totp_secret }}" />
+          <input id="otp" name="otp" type="text" value="{{ totp_response }}" onchange="formIsValid()"
+            onkeypress="formIsValid()" placeholder="123456"
+            class="block ml-4 w-24 rounded-md border-0 px-2 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6" />
+        </div>
+      </fieldset>
+
+      <div class="border-t border-gray-200 my-2"></div>
+
+      {# webauthn, this will be a small button that people can press #}
+      {# <input type="checkbox" id="webauthn-check" name="webauthn-check" value="webauthn" onchange="formIsValid()"
+        class="peer/webauthn disabled:opacity-50 disabled:cursor-not-allowed" />
+      <label for="webauthn-check" class="text-sm font-medium leading-6 text-gray-900 peer-disabled/webauthn:text-gray-400 peer-disabled/webauthn:cursor-not-allowed
+        ">Webauthn</label> #}
+      <fieldset>
+        {{ macros::checkbox(name='webauthn', label='Webauthn / FIDO2 / U2F / Security Key') }}
+        <div class="items-center justify-between hidden peer-checked/webauthn:block">
+          <button type="button" id="webauthn" class="flex justify-center rounded-md bg-emerald-500 px-3 m-1 text-sm font-semibold leading-6 text-white 
+          shadow-sm hover:bg-emerald-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600
+        disabled:bg-slate-50 disabled:text-slate-400 disabled:border-slate-200 disabled:shadow-none disabled:font-normal
+  disabled:cursor-not-allowed" onclick="credentialsCreate('passkey')" onkeypress="formIsValid()">
+            Set up a passkey
+          </button>
+          <button type="button" id="webauthn" class="flex justify-center rounded-md bg-emerald-500 px-3 m-1 text-sm font-semibold leading-6 text-white
+          shadow-sm hover:bg-emerald-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600
+        disabled:bg-slate-50 disabled:text-slate-400 disabled:border-slate-200 disabled:shadow-none disabled:font-normal
+  disabled:cursor-not-allowed" onclick="credentialsCreate('securitykey')" onkeypress="formIsValid()">
+            Set up a security key
+          </button>
+        </div>
+        <div class="my-2 hidden peer-disabled/webauthn:block">
+          {{ macros::warning(message="Webauthn requires SSL.") }}
+        </div>
+      </fieldset>
+
+    </div>
+    {{ macros::error(message='You need at least one factor to be able to login.') }}
+
+    <button type="submit" class="flex justify-center rounded-md text-xl bg-indigo-600 px-10 py-7 font-semibold leading-6 text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600
+  disabled:bg-slate-50 disabled:text-slate-500 disabled:border-slate-200 disabled:shadow-none
+  disabled:cursor-not-allowed
+  " disabled id="submit">
+      Generate config file
     </button>
-
-    
-
     {% if config %}
     <h3 class="mt-10 text-2xl font-bold leading-9 tracking-tight text-gray-900">
       Your config file is ready! 🎉
@@ -79,19 +163,20 @@
 
     {# you can safely share your password #}
     <p class="my-10 text-gray-800">
-      <strong>Important:</strong> You can safely share your password with
-      others. It is only used to generate a hash for your config.yaml file.
+      <strong>Important:</strong> You can safely share your user config file with
+      others.
+
+      Though your password is send unencrypted to the server, so be sure to use a new password you don't use anywhere
+      else.
     </p>
 
     <p class="mt-10 text-center text-sm text-gray-500">
-      <a
-        href="/login"
-        class="font-semibold text-indigo-600 hover:text-indigo-500"
-        >Go back to login</a
-      >
+      <a href="/login" class="font-semibold text-indigo-600 hover:text-indigo-500">Go back to login</a>
     </p>
-  </div>
-</form>
+  </form>
 
-
+</div>
+<script>
+  start();
+</script>
 {% endblock %}

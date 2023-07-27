@@ -1,16 +1,51 @@
-load('ext://nix_flake', 'build_flake_image')
+# load('ext://nix_flake', 'build_flake_image')
+def build_flake_image(ref, path = "", output = "", resultfile = "result", deps = []):
+    build_cmd = "nix build {path}#{output} --refresh --out-link result-{ref}".format(
+        path = path,
+        output = output,
+        ref = ref
+    )
+    commands = [
+        "rm -rf ./result-stupid-auth-target",
+        build_cmd,
+        # "docker image load -i ./result-{ref}".format(ref = ref),
+        # ./result | docker load
+        "./result-{ref} | docker load".format(ref = ref),
+        # 'IMG_NAME="$(tar -Oxf "./result-{ref}" manifest.json | jq -r ".[0].RepoTags[0]")"'.format(ref = ref),
+        'IMG_NAME="$(./result-{ref} | tar -Oxf - manifest.json | jq -r ".[0].RepoTags[0]")"'.format(ref = ref),
+        "docker tag ${IMG_NAME} ${EXPECTED_REF}"
+    ]
+    custom_build(
+        ref,
+        command = [
+            "nix-shell",
+            "--packages",
+            "coreutils",
+            "gnutar",
+            "jq",
+            "--run",
+            ";\n".join(commands),
+        ],
+        deps = deps,
+        live_update=[
+            sync('./result-stupid-auth-target', '/home/kah/result/'),
+            run('date > /restart.txt')
+        ]
+    )
 
 
-build_flake_image("stupid-auth", ".", "docker", deps=[
-    "./src/",
-    "./templates/",
-    "./flake.nix"
+build_flake_image("stupid-auth", ".", "docker-live", deps=[
+    # "./src/",
+    # "./templates/",
+    "./flake.nix",
+    # "./target/release/",
+    "./result-stupid-auth-target",
 ])
 allow_k8s_contexts('default')
 allow_k8s_contexts('home-cluster')
 default_registry('ttl.sh/nanne-stupid-auth')
 
-domain=os.getenv('DOMAIN', 'example.com')
+domain=os.getenv('AUTH_DOMAIN')
 
 load('ext://helm_resource', 'helm_resource', 'helm_repo')
 helm_repo('bjw-s', 'https://bjw-s.github.io/helm-charts/')
