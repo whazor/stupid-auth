@@ -83,7 +83,7 @@ mod test {
     #[test]
     fn tutorial() {
         let client = Client::tracked(crate::rocket()).expect("valid rocket instance");
-        let response = client.get(uri!(crate::tutorial())).dispatch();
+        let response = client.get(uri!(crate::routes::tutorial::tutorial())).dispatch();
         assert_eq!(response.status(), Status::Ok);
 
         let output = response.into_string().expect("valid string");
@@ -97,7 +97,7 @@ mod test {
         parser.find_child(form.clone(), "button[type=submit]");
 
         let url = decrypt_html_attribute(HTMLParser::get_attribute(form.clone(), "action"));
-        let expected_url = uri!(crate::tutorial_genconfig()).to_string();
+        let expected_url = uri!(crate::routes::tutorial::tutorial_genconfig()).to_string();
         assert_eq!(url, expected_url);
         let method = HTMLParser::get_attribute(form, "method");
         assert_eq!(method, "POST");
@@ -107,7 +107,7 @@ mod test {
     fn tutorial_genconfig() {
         let client = Client::tracked(crate::rocket()).expect("valid rocket instance");
         let response = client
-            .post(uri!(crate::tutorial_genconfig()))
+            .post(uri!(crate::routes::tutorial::tutorial_genconfig()))
             .header(ContentType::Form)
             .body("username=foo&password=bar")
             .dispatch();
@@ -142,7 +142,7 @@ mod test {
     fn login_and_auth() {
         let client = Client::tracked(crate::rocket()).expect("valid rocket instance");
         let response = client
-            .get(uri!(crate::login(
+            .get(uri!(crate::routes::login::login(
                 rd = Some("https://example.com"),
                 error = false
             )))
@@ -161,7 +161,7 @@ mod test {
         let url = decrypt_html_attribute(HTMLParser::get_attribute(form.clone(), "action"));
         let csrf = decrypt_html_attribute(HTMLParser::get_attribute(crsf_field.clone(), "value"));
         assert_eq!(csrf.len(), 32);
-        let expected_uri = uri!(crate::login_post(rd = Some("https://example.com"))).to_string();
+        let expected_uri = uri!(crate::routes::login::login_post(rd = Some("https://example.com"))).to_string();
         assert_eq!(url, expected_uri);
         let method = HTMLParser::get_attribute(form, "method");
         assert_eq!(method, "POST");
@@ -172,7 +172,7 @@ mod test {
         assert_eq!(cookie.value().len(), 80);
 
         let response = client
-            .post(uri!(crate::login_post(rd = Some("https://example.com"))))
+            .post(uri!(crate::routes::login::login_post(rd = Some("https://example.com"))))
             .header(ContentType::Form)
             .body(format!(
                 "username={}&password={}&csrf_token={}",
