@@ -10,7 +10,7 @@ Currently, it only supports forward auth from NGINX, and can be used to add auth
 
 Every authentication system makes different tradeoffs. This system is designed to be easy to use and secure enough for home lab use.
 
-The goal is to take the tradeoffs that only make sense for a home lab environment. Using this in an enterprise setting would be stupid.
+The goal is to take the tradeoffs that only make sense for a home lab environment. Using this in an enterprise setting would be stupid. Can you imagine a sys admin restarting the auth server because one user forgot their password?
 
 ### Are we secure yet?
 
@@ -35,8 +35,10 @@ So we want to have a rock-solid auth server that is stupidly simple. Instead of 
 
 ## Goals
 
-- [ ] [Cluster mode](https://github.com/whazor/stupid-auth/issues/1)
-- [ ] [Oauth2](https://github.com/whazor/stupid-auth/issues/2)
+- [ ] [Cluster mode](https://github.com/whazor/stupid-auth/issues/4)
+- [ ] [Oauth2](https://github.com/whazor/stupid-auth/issues/5)
+- [ ] [passkeys](https://github.com/whazor/stupid-auth/issues/6)
+
 
 ## Supported
 
