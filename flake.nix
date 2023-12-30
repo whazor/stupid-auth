@@ -1,6 +1,6 @@
 {
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-23.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-23.11";
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
     devenv.url = "github:cachix/devenv";
 
@@ -99,7 +99,7 @@
             inherit stupid-auth-crate;
             stupid-auth-crate-clippy = craneMaxLib.cargoClippy (commonArgs // {
               inherit cargoArtifacts;
-              cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+              cargoClippyExtraArgs = "--all-targets -- --deny warnings -A clippy::redundant_locals";
             });
             stupid-auth-crate-audit = craneMaxLib.cargoAudit
               (commonArgs // { inherit src advisory-db; });

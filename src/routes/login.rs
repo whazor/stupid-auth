@@ -40,7 +40,7 @@ pub(crate) fn login(
     Template::render(
         "login.html",
         context! {
-           post_url: uri!(login_post(rd = rd)),
+           post_url: uri!(login_post(rd)),
            error: error,
            csrf_token: csrf_token,
         },
@@ -59,7 +59,7 @@ pub(crate) fn login_post(
     // check csrf token
     let csrf_token = cookies.get_private("csrf_token");
     if csrf_token.is_none() {
-        return Redirect::to(uri!(login(rd = rd, error = true)));
+        return Redirect::to(uri!(login(rd, true)));
     }
     // delete csrf token
     cookies.remove_private(rocket::http::Cookie::named("csrf_token"));
@@ -85,7 +85,7 @@ pub(crate) fn login_post(
     }
 
     if found.is_none() {
-        return Redirect::to(uri!(login(rd = rd, error = true)));
+        return Redirect::to(uri!(login(rd, true)));
     }
 
     // increase session id
@@ -104,19 +104,12 @@ pub(crate) fn login_post(
         rocket::http::Cookie::build("stupid_auth_user", to_string(&found).unwrap())
             .secure(true)
             .domain(config.domain.clone())
-            .expires(OffsetDateTime::now_utc() + Duration::days(config.cookie_expire.clone().into()))
+            .expires(OffsetDateTime::now_utc() + Duration::days(config.cookie_expire.into()))
             .finish(),
     );
-    // redirect = rd if some and not empty, else "/"
-    let backup = "/".to_string();
-    let redirect: String = if let Some(rd) = rd {
-        if rd.is_empty() || rd == "#" {
-            backup
-        } else {
-            rd
-        }
-    } else {
-        backup
-    };
-    Redirect::to(redirect)
+    // when # or empty, redirect to /
+    Redirect::to(
+        rd.filter(|val| !val.is_empty() && val != "#")
+          .unwrap_or("/".to_string())
+    )
 }
