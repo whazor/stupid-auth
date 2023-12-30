@@ -6,7 +6,7 @@ env:
 
 on:
   release:
-    types: [created]
+    types: [published]
 
 permissions:
   contents: read
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   publish:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       - uses: DeterminateSystems/nix-installer-action@main
