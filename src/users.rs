@@ -3,7 +3,7 @@ use std::{env, fs};
 use serde::{Deserialize, Serialize};
 use serde_yaml::from_str;
 
-#[derive(FromForm, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, FromForm, Serialize, Deserialize, PartialEq, Debug)]
 pub struct User {
     pub username: String,
     pub password: String,
