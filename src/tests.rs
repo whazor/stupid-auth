@@ -140,11 +140,11 @@ mod test {
 
     #[test]
     fn login_and_auth() {
+        use crate::users::UserError;
         let client = Client::tracked(crate::rocket()).expect("valid rocket instance");
         let response = client
             .get(uri!(crate::routes::login::login(
-                rd = Some("https://example.com"),
-                error = false
+                Some("https://example.com"), None
             )))
             .dispatch();
         assert_eq!(response.status(), Status::Ok);

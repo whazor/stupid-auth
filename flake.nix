@@ -197,6 +197,7 @@
                 pkgs.dive
                 pkgs.lld
                 pkgs.openssl
+                pkgs.commitizen
                 pkgs.mold
                 pkgs.entr
                 pkgs.llvmPackages_16.clang-unwrapped
@@ -211,6 +212,7 @@
                 ${pkgs.traefik}/bin/traefik --entrypoints.web.address=:8500 --providers.file.filename=router.yaml
               '';
               scripts.run.exec = ''
+                TAILWIND_CSS=$DEVENV_ROOT/static/tw.css 
                 ${pkgs.cargo-watch}/bin/cargo-watch -x run
               '';
               scripts.build.exec = ''

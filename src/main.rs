@@ -49,6 +49,16 @@ fn index() -> &'static str {
 #[derive(Debug)]
 struct OriginalURL(String);
 
+#[catch(500)]
+fn internal_error(_req: &Request) -> String {
+    "Whoops! Looks like we messed up.".to_string()
+}
+
+#[catch(404)]
+fn not_found(req: &Request) -> String {
+    format!("I couldn't find '{}'. Try something else?", req.uri())
+}
+
 #[rocket::async_trait]
 impl<'r> FromRequest<'r> for OriginalURL {
     type Error = ();
@@ -111,7 +121,7 @@ fn logout(cookies: &CookieJar<'_>, sessions: &State<SessionState>) -> Redirect {
         }
     }
 
-    cookies.remove_private(rocket::http::Cookie::named("stupid_auth_user"));
+    cookies.remove_private("stupid_auth_user");
     Redirect::to(uri!(index))
 }
 
@@ -199,6 +209,7 @@ fn rocket() -> _ {
                 logout
             ],
         )
+        .register("/", catchers![internal_error, not_found])
         .attach(AdHoc::config::<AppConfig>())
         .attach(Template::custom(|engines| {
             engines

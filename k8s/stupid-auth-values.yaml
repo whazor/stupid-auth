@@ -1,0 +1,68 @@
+controllers:
+  main:
+    annotations:
+      reloader.stakater.com/auto: "true"    
+    containers:
+      main: 
+        image: 
+          repository: ghcr.io/whazor/stupid-auth
+          tag: 0.2.0
+        env:
+          TZ: Europe/Amsterdam
+          AUTH_DOMAIN: example.com
+          AUTH_PORT: &port 8000
+        probes:
+          liveness: &probes
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                path: /
+                port: *port
+              initialDelaySeconds: 0
+              periodSeconds: 10
+              timeoutSeconds: 1
+              failureThreshold: 3
+          readiness: *probes
+        resources:
+          requests:
+            cpu: 10m
+            memory: 50Mi
+          limits:
+            memory: 500Mi
+    pod:
+      securityContext:
+        runAsUser: 568
+        runAsGroup: 568
+        fsGroup: 568
+        fsGroupChangePolicy: OnRootMismatch
+service:
+  main:
+    ports:
+      http:
+        port: 8000
+ingress:
+  main:
+    enabled: true
+    annotations:
+      external-dns.home.arpa/enabled: "true"
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+    hosts:
+    - host: stupid-auth.example.com
+      paths:
+      - path: /
+        service:
+          name: main
+          port: http
+    tls:
+      - hosts:
+        - stupid-auth.example.com
+        secretName: stupid-auth-tls
+persistence:
+  secret-file:
+    enabled: true
+    type: secret
+    name: stupid-auth-users
+    subPath: users.yaml
+    mountPath: /users.yaml
+    readOnly: true
