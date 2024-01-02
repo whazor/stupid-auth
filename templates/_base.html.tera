@@ -1,6 +1,6 @@
 {% import "_macros.html" as macros %}
 <!DOCTYPE html>
-<html lang="en" class="h-full bg-white">
+<html lang="en" class="h-full bg-white dark:bg-slate-900">
 
 <head>
   <meta charset="UTF-8">
@@ -13,7 +13,7 @@
 <body class="h-full">
   <div class="flex min-h-full flex-col justify-center px-6 py-12 lg:px-8">
     <div class="sm:mx-auto sm:w-full sm:max-w-sm">
-      <h1 class="mt-6 text-center text-4xl font-extralight drop-shadow-sm font-serif leading-9 text-gray-900">
+      <h1 class="mt-6 text-center text-4xl font-extralight drop-shadow-sm font-serif leading-9 text-gray-900 dark:text-gray-50">
         StupidAuth
       </h1>
     </div>

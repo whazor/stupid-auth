@@ -6,13 +6,14 @@ use rocket::{form::Form, response::Redirect};
 use rocket_dyn_templates::{context, Template};
 
 use rand::Rng;
-use rocket::http::CookieJar;
+use rocket::http::{CookieJar, Cookie};
 
 use serde_yaml::to_string;
 
 use std::{thread, time};
 
 use crate::users::User;
+use crate::users::UserError;
 use crate::users::{get_users, UserWithSessionID};
 use crate::{AppConfig, SessionState};
 
@@ -22,10 +23,12 @@ use crate::passwd::check_password;
 #[get("/login?<rd>&<error>")]
 pub(crate) fn login(
     rd: Option<String>, 
-    error: bool, 
+    error: Option<UserError>,
     cookies: &CookieJar<'_>,
 ) -> Template {
     info!("showing login page, return URL: {:?}", rd);
+
+    println!("{:?}", error);
     // setup csrf token
     let rng = rand::thread_rng();
     let csrf_token: String = rng
@@ -41,7 +44,7 @@ pub(crate) fn login(
         "login.html",
         context! {
            post_url: uri!(login_post(rd)),
-           error: error,
+           error: error.map(|e| e.to_string()),
            csrf_token: csrf_token,
         },
     )
@@ -59,13 +62,17 @@ pub(crate) fn login_post(
     // check csrf token
     let csrf_token = cookies.get_private("csrf_token");
     if csrf_token.is_none() {
-        return Redirect::to(uri!(login(rd, true)));
+        return Redirect::to(uri!(login(rd, Some(UserError::IncorrectUserPassword))));
     }
     // delete csrf token
-    cookies.remove_private(rocket::http::Cookie::named("csrf_token"));
+    cookies.remove_private("csrf_token");
 
     let users = get_users();
-    println!("users: {:?}", users);
+    if users.is_err() {
+        return Redirect::to(uri!(login(rd, Some(users.err().unwrap()))))
+    }
+    let users = users.unwrap();
+
     // check if in users
     let mut found = Option::None;
 
@@ -85,7 +92,7 @@ pub(crate) fn login_post(
     }
 
     if found.is_none() {
-        return Redirect::to(uri!(login(rd, true)));
+        return Redirect::to(uri!(login(rd, Some(UserError::IncorrectUserPassword))));
     }
 
     // increase session id
@@ -101,11 +108,10 @@ pub(crate) fn login_post(
     };
     
     cookies.add_private(
-        rocket::http::Cookie::build("stupid_auth_user", to_string(&found).unwrap())
+        Cookie::build(("stupid_auth_user", to_string(&found).unwrap()))
             .secure(true)
             .domain(config.domain.clone())
             .expires(OffsetDateTime::now_utc() + Duration::days(config.cookie_expire.into()))
-            .finish(),
     );
     // when # or empty, redirect to /
     Redirect::to(
