@@ -178,6 +178,7 @@
             #!${pkgs.runtimeShell}
             echo "$GITHUB_TOKEN" | skopeo login ghcr.io -u whazor --password-stdin
             ${self'.packages.docker} | gzip --fast | skopeo copy docker-archive:/dev/stdin docker://ghcr.io/whazor/stupid-auth:${manifest.version}
+            skopeo copy docker://ghcr.io/whazor/stupid-auth:${manifest.version} docker://ghcr.io/whazor/stupid-auth:latest
           '';
 
           devenv.shells.default = { config, ... }:
@@ -187,6 +188,8 @@
               env.STATIC_DIR = "${config.env.DEVENV_ROOT}/static/";
               env.TAILWIND_CSS =
                 "${self'.packages.stupid-auth-css}/static/tw.css";
+              env.STUPID_AUTH_VERSION = self'.packages.stupid-auth.version;
+
               packages = [
                 pkgs.traefik
                 unstable.tilt
