@@ -17,4 +17,18 @@ jobs:
         with:
           release-type: rust
           package-name: stupid-auth
-          
+
+      - uses: actions/checkout@v4
+        # these if statements ensure that a publication only occurs when
+        # a new release is created:
+        if: ${{ steps.release.outputs.release_created }}
+      - uses: DeterminateSystems/nix-installer-action@main
+        if: ${{ steps.release.outputs.release_created }}
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+        if: ${{ steps.release.outputs.release_created }}
+      - run: nix build .#docker
+        if: ${{ steps.release.outputs.release_created }} 
+      - run: nix run .#publish-docker
+        env:
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+        if: ${{ steps.release.outputs.release_created }} 
