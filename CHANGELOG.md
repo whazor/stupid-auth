@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/whazor/stupid-auth/compare/v0.2.0...v0.3.0) (2024-01-03)
+
+
+### Features
+
+* dark mode and better errors ([#9](https://github.com/whazor/stupid-auth/issues/9)) ([1c694d0](https://github.com/whazor/stupid-auth/commit/1c694d0917076a7e4a1bd606264a4a596b250ce4))
+
 ## 0.2.0 (2023-12-30)
 
 
