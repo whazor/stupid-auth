@@ -1,18 +1,130 @@
 {% extends "_base.html" %}
 {% block title %}Login{% endblock %}
 {% block content %}
+<script>
+  function b64urlToBytes(input) {
+    const normalized = input.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+    const raw = atob(padded);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i += 1) {
+      bytes[i] = raw.charCodeAt(i);
+    }
+    return bytes;
+  }
+
+  function bytesToB64url(bytes) {
+    let binary = '';
+    bytes.forEach((b) => {
+      binary += String.fromCharCode(b);
+    });
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  function normalizeAssertionOptions(options) {
+    return {
+      ...options,
+      challenge: b64urlToBytes(options.challenge),
+      allowCredentials: (options.allowCredentials || []).map((cred) => ({
+        ...cred,
+        id: b64urlToBytes(cred.id),
+      })),
+    };
+  }
+
+  function credentialToJSON(value) {
+    if (value instanceof ArrayBuffer) {
+      return bytesToB64url(new Uint8Array(value));
+    }
+    if (value instanceof Uint8Array) {
+      return bytesToB64url(value);
+    }
+    if (Array.isArray(value)) {
+      return value.map(credentialToJSON);
+    }
+    if (value && typeof value === 'object') {
+      const out = {};
+      Object.keys(value).forEach((k) => {
+        out[k] = credentialToJSON(value[k]);
+      });
+      return out;
+    }
+    return value;
+  }
+
+  async function signInWithPasskey() {
+    const username = document.getElementById('username').value.trim();
+    const status = document.getElementById('passkey-status');
+
+    if (!username) {
+      status.textContent = 'Username is required for passkey login.';
+      return;
+    }
+
+    status.textContent = 'Starting passkey login...';
+
+    const startResponse = await fetch('/login/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, rd: '{{ login_rd }}' }),
+    });
+
+    if (!startResponse.ok) {
+      status.textContent = `Passkey start failed (${startResponse.status}).`;
+      return;
+    }
+
+    const start = await startResponse.json();
+    localStorage.setItem('login_token', start.token);
+
+    try {
+      const assertion = await navigator.credentials.get({
+        publicKey: normalizeAssertionOptions(start.assertionOptions),
+      });
+
+      const finishResponse = await fetch('/login/finish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: localStorage.getItem('login_token'),
+          credential: credentialToJSON(assertion),
+        }),
+      });
+
+      localStorage.removeItem('login_token');
+
+      if (!finishResponse.ok) {
+        status.textContent = `Passkey login failed (${finishResponse.status}).`;
+        return;
+      }
+
+      const result = await finishResponse.json();
+      window.location.href = result.redirect_url || '/';
+    } catch (error) {
+      localStorage.removeItem('login_token');
+      status.textContent = `Passkey login cancelled or failed: ${error}`;
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    localStorage.removeItem('login_token');
+    const passkeyButton = document.getElementById('passkey-login-button');
+    if (passkeyButton) {
+      passkeyButton.addEventListener('click', signInWithPasskey);
+    }
+  });
+</script>
+
 <div class="sm:mx-auto sm:w-full sm:max-w-sm">
   <h2 class="mt-10 text-center text-2xl font-bold leading-9 tracking-tight text-gray-900 dark:text-gray-300">Sign in to your account</h2>
 </div>
 
 <div class="mt-10 sm:mx-auto sm:w-full sm:max-w-sm">
   <form class="space-y-6" action="{{ post_url }}" method="POST">
-    {# csrf #}
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     {% if error %}
     {{ macros::error(message=error) }}
     {% endif %}
-
 
     {{ macros::input(name="username", label="Username", autocomplete="username webauthn") }}
 
@@ -24,6 +136,14 @@
         in</button>
     </div>
   </form>
+
+  <div class="mt-6">
+    <button id="passkey-login-button" type="button"
+      class="flex w-full justify-center rounded-md bg-gray-700 px-3 py-1.5 text-sm font-semibold leading-6 text-white shadow-sm hover:bg-gray-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-700">
+      Sign in with passkey
+    </button>
+    <p id="passkey-status" class="mt-3 text-sm text-gray-700 dark:text-gray-300"></p>
+  </div>
 
   <p class="mt-10 text-center text-sm text-gray-500 dark:text-gray-400">
     Create a new user or change password? <a href="/tutorial"

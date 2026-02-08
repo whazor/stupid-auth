@@ -4,11 +4,16 @@ mod test {
         password_hash::{PasswordHash, PasswordVerifier},
         Argon2,
     };
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     use axum::{
         body::Body,
         http::{header, Request, StatusCode},
     };
+    use ciborium::value::Value as CborValue;
     use http_body_util::BodyExt;
+    use p256::ecdsa::{signature::Signer, Signature, SigningKey};
+    use rand::RngCore;
+    use sha2::{Digest, Sha256};
     use tower::ServiceExt;
 
     #[derive(Debug)]
@@ -248,6 +253,139 @@ mod test {
             .expect("request succeeded");
 
         assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+    }
+
+    #[tokio::test]
+    async fn login_start_requires_registered_passkey() {
+        let app = crate::app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login/start")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"username":"foo","rd":"/"}"#))
+                    .unwrap(),
+            )
+            .await
+            .expect("request succeeded");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn webauthn_crypto_registration_and_login_flow() {
+        let rp_id = "localhost";
+        let register_challenge = "register-challenge";
+        let login_challenge = "login-challenge";
+
+        let signing_key = SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
+        let verify_key = signing_key.verifying_key();
+        let pub_point = verify_key.to_encoded_point(false);
+        let x = pub_point.x().expect("x").to_vec();
+        let y = pub_point.y().expect("y").to_vec();
+
+        let cose_key = CborValue::Map(vec![
+            (CborValue::Integer(1_i64.into()), CborValue::Integer(2_i64.into())),
+            (CborValue::Integer(3_i64.into()), CborValue::Integer((-7_i64).into())),
+            (CborValue::Integer((-1_i64).into()), CborValue::Integer(1_i64.into())),
+            (CborValue::Integer((-2_i64).into()), CborValue::Bytes(x)),
+            (CborValue::Integer((-3_i64).into()), CborValue::Bytes(y)),
+        ]);
+        let mut cose_key_bytes = Vec::new();
+        ciborium::ser::into_writer(&cose_key, &mut cose_key_bytes).expect("cose encode");
+
+        let mut credential_id_raw = vec![0_u8; 16];
+        rand::rng().fill_bytes(&mut credential_id_raw);
+        let credential_id = URL_SAFE_NO_PAD.encode(&credential_id_raw);
+
+        let rp_hash = Sha256::digest(rp_id.as_bytes());
+        let mut reg_auth_data = Vec::new();
+        reg_auth_data.extend_from_slice(&rp_hash);
+        reg_auth_data.push(0x41);
+        reg_auth_data.extend_from_slice(&0_u32.to_be_bytes());
+        reg_auth_data.extend_from_slice(&[0_u8; 16]);
+        reg_auth_data.extend_from_slice(&(credential_id_raw.len() as u16).to_be_bytes());
+        reg_auth_data.extend_from_slice(&credential_id_raw);
+        reg_auth_data.extend_from_slice(&cose_key_bytes);
+
+        let attestation_object = CborValue::Map(vec![
+            (
+                CborValue::Text("fmt".to_string()),
+                CborValue::Text("none".to_string()),
+            ),
+            (
+                CborValue::Text("attStmt".to_string()),
+                CborValue::Map(vec![]),
+            ),
+            (
+                CborValue::Text("authData".to_string()),
+                CborValue::Bytes(reg_auth_data),
+            ),
+        ]);
+        let mut attestation_bytes = Vec::new();
+        ciborium::ser::into_writer(&attestation_object, &mut attestation_bytes)
+            .expect("attestation encode");
+
+        let reg_client_data_raw = serde_json::to_vec(&serde_json::json!({
+            "type": "webauthn.create",
+            "challenge": register_challenge,
+            "origin": "https://localhost"
+        }))
+        .expect("client data json");
+        let registration_credential = serde_json::json!({
+            "id": credential_id,
+            "rawId": credential_id,
+            "type": "public-key",
+            "response": {
+                "clientDataJSON": URL_SAFE_NO_PAD.encode(&reg_client_data_raw),
+                "attestationObject": URL_SAFE_NO_PAD.encode(&attestation_bytes)
+            }
+        });
+
+        let registration = crate::webauthn::verify_registration_credential(
+            rp_id,
+            register_challenge,
+            &registration_credential,
+        )
+        .expect("registration verify");
+        assert_eq!(registration.credential_id, credential_id);
+
+        let mut auth_data = Vec::new();
+        auth_data.extend_from_slice(&rp_hash);
+        auth_data.push(0x01);
+        auth_data.extend_from_slice(&1_u32.to_be_bytes());
+
+        let login_client_data_raw = serde_json::to_vec(&serde_json::json!({
+            "type": "webauthn.get",
+            "challenge": login_challenge,
+            "origin": "https://localhost"
+        }))
+        .expect("client data json");
+
+        let mut signed_payload = Vec::new();
+        signed_payload.extend_from_slice(&auth_data);
+        signed_payload.extend_from_slice(&Sha256::digest(&login_client_data_raw));
+
+        let signature: Signature = signing_key.sign(&signed_payload);
+        let assertion = serde_json::json!({
+            "id": credential_id,
+            "type": "public-key",
+            "response": {
+                "clientDataJSON": URL_SAFE_NO_PAD.encode(&login_client_data_raw),
+                "authenticatorData": URL_SAFE_NO_PAD.encode(&auth_data),
+                "signature": URL_SAFE_NO_PAD.encode(signature.to_der().as_bytes()),
+            }
+        });
+
+        let auth = crate::webauthn::verify_authentication_assertion(
+            rp_id,
+            login_challenge,
+            &assertion,
+            &registration.public_key_cose,
+        )
+        .expect("assertion verify");
+        assert_eq!(auth.sign_count, 1);
     }
 
     #[tokio::test]

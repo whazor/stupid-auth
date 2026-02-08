@@ -4,11 +4,10 @@ use axum::{
     response::{IntoResponse, Response},
     Form, Json,
 };
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use base64::Engine;
 use once_cell::sync::Lazy;
 use rand::{distr::Alphanumeric, Rng, RngCore};
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Mutex;
@@ -19,6 +18,7 @@ use crate::{
     passwd::generate_password,
     render_template,
     users::{get_users, PasskeyUser, User, Users},
+    webauthn::verify_registration_credential,
     AppState,
 };
 
@@ -60,7 +60,7 @@ pub(crate) struct RegisterStartResponse {
 #[derive(Debug, Deserialize)]
 pub(crate) struct RegisterFinishRequest {
     token: String,
-    credential: JsonValue,
+    credential: serde_json::Value,
     server_signing_key: Option<String>,
 }
 
@@ -103,7 +103,7 @@ fn now_ts() -> i64 {
 fn random_b64url(bytes: usize) -> String {
     let mut data = vec![0_u8; bytes];
     rand::rng().fill_bytes(&mut data);
-    URL_SAFE_NO_PAD.encode(data)
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
 }
 
 fn random_signing_key() -> String {
@@ -386,72 +386,38 @@ pub(crate) async fn tutorial_register_finish(
             .into_response();
     }
 
+    let rp_id = request_rp_id(&headers);
+    let verified = match verify_registration_credential(&rp_id, &entry.challenge, &payload.credential) {
+        Ok(result) => result,
+        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+    };
+
     let response = match payload.credential.get("response") {
         Some(value) => value,
         None => return (StatusCode::BAD_REQUEST, "invalid credential payload").into_response(),
     };
 
-    let client_data_json = match response
-        .get("clientDataJSON")
-        .and_then(JsonValue::as_str)
-        .map(ToString::to_string)
-    {
-        Some(value) => value,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                "clientDataJSON is required in credential.response",
-            )
-                .into_response();
-        }
-    };
-
-    let parsed_client_data = match URL_SAFE_NO_PAD
-        .decode(client_data_json.as_bytes())
-        .ok()
-        .and_then(|raw| serde_json::from_slice::<JsonValue>(&raw).ok())
-    {
-        Some(value) => value,
-        None => return (StatusCode::BAD_REQUEST, "invalid clientDataJSON").into_response(),
-    };
-
-    let ceremony_type = parsed_client_data
-        .get("type")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("");
-    let challenge = parsed_client_data
-        .get("challenge")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("");
-
-    if ceremony_type != "webauthn.create" || challenge != entry.challenge {
-        return (
-            StatusCode::BAD_REQUEST,
-            "invalid clientDataJSON challenge or type",
-        )
-            .into_response();
-    }
-
     let passkey_entry = PasskeyUser {
         username: entry.username,
-        credential_id: payload
-            .credential
-            .get("id")
-            .and_then(JsonValue::as_str)
-            .unwrap_or_default()
-            .to_string(),
+        credential_id: verified.credential_id.clone(),
         raw_id: payload
             .credential
             .get("rawId")
-            .and_then(JsonValue::as_str)
+            .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .to_string(),
-        client_data_json,
+        client_data_json: response
+            .get("clientDataJSON")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
         attestation_object: response
             .get("attestationObject")
-            .and_then(JsonValue::as_str)
+            .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .to_string(),
+        public_key_cose: verified.public_key_cose.clone(),
+        sign_count: verified.sign_count,
         signature: String::new(),
     };
 

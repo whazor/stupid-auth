@@ -20,8 +20,9 @@ mod tests;
 mod passwd;
 mod routes;
 mod users;
+mod webauthn;
 
-use routes::login::{login, login_post};
+use routes::login::{login, login_finish, login_post, login_start};
 use routes::tutorial::{tutorial, tutorial_genconfig, tutorial_register_finish, tutorial_register_start};
 use users::UserWithSessionID;
 
@@ -218,6 +219,8 @@ pub(crate) fn app() -> Router {
         .route("/tutorial/register/finish", post(tutorial_register_finish))
         .route("/auth", get(auth))
         .route("/login", get(login).post(login_post))
+        .route("/login/start", post(login_start))
+        .route("/login/finish", post(login_finish))
         .route("/logout", get(logout))
         .fallback(not_found)
         .with_state(state)

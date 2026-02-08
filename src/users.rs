@@ -17,6 +17,10 @@ pub struct PasskeyUser {
     pub raw_id: String,
     pub client_data_json: String,
     pub attestation_object: String,
+    #[serde(default)]
+    pub public_key_cose: String,
+    #[serde(default)]
+    pub sign_count: u32,
     pub signature: String,
 }
 
