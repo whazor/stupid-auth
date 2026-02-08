@@ -59,3 +59,15 @@ From the tutorial you will learn how to create a users.yaml file and how to crea
 ```bash
 kubectl create secret generic stupid-auth-users --from-file=users.yaml
 ```
+
+## Environment Variables
+
+| Variable | Scope | Default | Description |
+| --- | --- | --- | --- |
+| `AUTH_ADDRESS` | Runtime app | `0.0.0.0` | Bind address for the HTTP listener. |
+| `AUTH_PORT` | Runtime app | `8000` | Bind port for the HTTP listener. |
+| `AUTH_DOMAIN` | Runtime app | `localhost` | Cookie domain used for auth cookie writes. |
+| `AUTH_COOKIE_EXPIRE` | Runtime app | `30` | Auth cookie expiration in days. |
+| `AUTH_CONFIG_FILE` | Runtime app | `users.yaml` | Path to the YAML auth config file. |
+| `TAILWIND_CSS` | Runtime app / dev env | `static/tw.css` | Path to prebuilt CSS served at `/public/tw.css`. |
+| `STUPID_AUTH_VERSION` | Dev/deploy env | _(none)_ | Version metadata set by Nix/Tilt wiring. |

@@ -104,7 +104,11 @@ impl From<serde_yaml::Error> for UserError {
 }
 
 pub fn get_users() -> Result<Users, UserError> {
-    let contents = fs::read_to_string("users.yaml")?;
+    let path = std::env::var("AUTH_CONFIG_FILE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "users.yaml".to_string());
+    let contents = fs::read_to_string(path)?;
     let users: Users = from_str(&contents)?;
     Ok(users)
 }
