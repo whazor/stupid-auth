@@ -198,6 +198,7 @@ fn issue_auth_cookie(state: &AppState, jar: PrivateCookieJar, user: User) -> Pri
         serde_yaml::to_string(&stored_user).expect("valid yaml"),
     ))
     .secure(true)
+    .path("/")
     .domain(state.config.domain.clone())
     .expires(Expiration::DateTime(
         OffsetDateTime::now_utc() + Duration::days(i64::from(state.config.cookie_expire)),

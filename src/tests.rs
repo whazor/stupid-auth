@@ -541,7 +541,9 @@ mod test {
             finish_body["redirect_url"].as_str().expect("redirect"),
             "/protected"
         );
-        assert!(extract_cookie(&finish_headers, "stupid_auth_user").is_some());
+        let auth_cookie =
+            extract_cookie(&finish_headers, "stupid_auth_user").expect("auth cookie exists");
+        assert!(auth_cookie.contains("Path=/"));
 
         if let Some(old) = prev {
             std::env::set_var("AUTH_CONFIG_FILE", old);
@@ -616,6 +618,7 @@ mod test {
         assert_eq!(location, "/welcome");
 
         let auth_cookie = extract_cookie(&headers, "stupid_auth_user").expect("auth cookie exists");
+        assert!(auth_cookie.contains("Path=/"));
 
         let response = app
             .oneshot(
