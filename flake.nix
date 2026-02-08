@@ -1,11 +1,10 @@
 {
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-23.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
     devenv.url = "github:cachix/devenv";
 
     crane.url = "github:ipetkov/crane";
-    crane.inputs.nixpkgs.follows = "nixpkgs";
 
     fenix = {
       url = "github:nix-community/fenix";
@@ -39,8 +38,8 @@
             OPENSSL_LIB_DIR = "${opensslStatic.out}/lib";
             OPENSSL_INCLUDE_DIR = "${opensslStatic.dev}/include";
           };
-          craneLib = inputs.crane.lib.${system};
-          craneMaxLib = inputs.crane.lib.${system};
+          craneLib = inputs.crane.mkLib pkgs;
+          craneMaxLib = inputs.crane.mkLib pkgs;
           manifest = (pkgs.lib.importTOML ./Cargo.toml).package;
 
           templatesFilter = path: _type:
@@ -129,12 +128,18 @@
                 (tailwindConfigFilter path type) || (templatesFilter path type);
             };
             name = "stupid-auth-css";
-            buildInputs = [ pkgs.nodePackages_latest.tailwindcss ];
+            buildInputs = [ pkgs.tailwindcss ];
             phases = [ "buildPhase" ];
             buildPhase = ''
               mkdir -p $out/static/
               cd $src
-              ${pkgs.nodePackages_latest.tailwindcss}/bin/tailwind build -o $out/static/tw.css
+              tmp_input="$(mktemp)"
+              cat > "$tmp_input" <<'EOF'
+              @tailwind base;
+              @tailwind components;
+              @tailwind utilities;
+              EOF
+              ${pkgs.tailwindcss}/bin/tailwindcss -c $src/tailwind.config.js -i "$tmp_input" -o $out/static/tw.css
               sha1sum $out/static/tw.css | head -c 40 > $out/static/tw.css.sha1
             '';
           };
@@ -196,14 +201,14 @@
 
                 pkgs.python3 # used by tilt
                 pkgs.cargo-watch
-                pkgs.nodePackages_latest.tailwindcss
+                pkgs.tailwindcss
                 pkgs.dive
                 pkgs.lld
                 pkgs.openssl
                 pkgs.commitizen
                 pkgs.mold
                 pkgs.entr
-                pkgs.llvmPackages_16.clang-unwrapped
+                pkgs.llvmPackages.clang-unwrapped
               ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin
                 (with pkgs.darwin.apple_sdk; [
                   frameworks.Security
@@ -222,7 +227,12 @@
                 ${pkgs.cargo-watch}/bin/cargo-watch -x 'build --release'
               '';
               scripts.css.exec = ''
-                ${pkgs.nodePackages_latest.tailwindcss}/bin/tailwind -w -o $DEVENV_ROOT/static/tw.css
+                cat > $DEVENV_ROOT/.tailwind.input.css <<'EOF'
+                @tailwind base;
+                @tailwind components;
+                @tailwind utilities;
+                EOF
+                ${pkgs.tailwindcss}/bin/tailwindcss -c $DEVENV_ROOT/tailwind.config.js -i $DEVENV_ROOT/.tailwind.input.css -w -o $DEVENV_ROOT/static/tw.css
               '';
               scripts.check.exec = ''
                 nix flake check --impure
