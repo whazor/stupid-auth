@@ -118,7 +118,7 @@
 
           packages.stupid-auth-css = let
             tailwindConfigFilter = path: type:
-              builtins.match ".*tailwind.config.js" path != null;
+              builtins.match ".*tailwind.css" path != null;
             templatesFilter = path: type:
               builtins.match ".*templates.*" path != null;
           in pkgs.stdenv.mkDerivation {
@@ -128,18 +128,12 @@
                 (tailwindConfigFilter path type) || (templatesFilter path type);
             };
             name = "stupid-auth-css";
-            buildInputs = [ pkgs.tailwindcss ];
+            buildInputs = [ pkgs.tailwindcss_4 ];
             phases = [ "buildPhase" ];
             buildPhase = ''
               mkdir -p $out/static/
               cd $src
-              tmp_input="$(mktemp)"
-              cat > "$tmp_input" <<'EOF'
-              @tailwind base;
-              @tailwind components;
-              @tailwind utilities;
-              EOF
-              ${pkgs.tailwindcss}/bin/tailwindcss -c $src/tailwind.config.js -i "$tmp_input" -o $out/static/tw.css
+              ${pkgs.tailwindcss_4}/bin/tailwindcss -i $src/tailwind.css -o $out/static/tw.css
               sha1sum $out/static/tw.css | head -c 40 > $out/static/tw.css.sha1
             '';
           };
@@ -201,7 +195,7 @@
 
                 pkgs.python3 # used by tilt
                 pkgs.cargo-watch
-                pkgs.tailwindcss
+                pkgs.tailwindcss_4
                 pkgs.dive
                 pkgs.lld
                 pkgs.openssl
@@ -227,12 +221,7 @@
                 ${pkgs.cargo-watch}/bin/cargo-watch -x 'build --release'
               '';
               scripts.css.exec = ''
-                cat > $DEVENV_ROOT/.tailwind.input.css <<'EOF'
-                @tailwind base;
-                @tailwind components;
-                @tailwind utilities;
-                EOF
-                ${pkgs.tailwindcss}/bin/tailwindcss -c $DEVENV_ROOT/tailwind.config.js -i $DEVENV_ROOT/.tailwind.input.css -w -o $DEVENV_ROOT/static/tw.css
+                ${pkgs.tailwindcss_4}/bin/tailwindcss -i $DEVENV_ROOT/tailwind.css -w -o $DEVENV_ROOT/static/tw.css
               '';
               scripts.check.exec = ''
                 nix flake check --impure
