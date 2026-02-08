@@ -129,8 +129,13 @@ fn validate_redirect(rd: Option<String>, allowed_host: &str) -> Result<Option<St
     }
 
     let parsed = Url::parse(&rd).map_err(|_| UserError::InvalidReturnUrl)?;
-    let host = parsed.host_str().ok_or(UserError::InvalidReturnUrl)?;
-    if host != allowed_host {
+    let host = parsed
+        .host_str()
+        .ok_or(UserError::InvalidReturnUrl)?
+        .to_ascii_lowercase();
+    let allowed = allowed_host.trim().trim_end_matches('.').to_ascii_lowercase();
+    let is_allowed = host == allowed || host.ends_with(&format!(".{allowed}"));
+    if !is_allowed {
         return Err(UserError::InvalidReturnUrl);
     }
 

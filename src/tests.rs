@@ -682,4 +682,95 @@ mod test {
         let body = response_text(response).await;
         assert!(body.contains("Invalid return URL"));
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn login_post_rejects_invalid_return_url() {
+        let app = crate::app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login?rd=https%3A%2F%2Fevil.example")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from("username=foo&password=bar&csrf_token=test"))
+                    .unwrap(),
+            )
+            .await
+            .expect("request succeeded");
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get(header::LOCATION)
+            .expect("location")
+            .to_str()
+            .expect("utf8");
+        assert_eq!(location, "/login?error=invalid_return_url");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn login_allows_exact_and_subdomain_redirects_only() {
+        let prev = std::env::var("AUTH_DOMAIN").ok();
+        std::env::set_var("AUTH_DOMAIN", "example.com");
+
+        let app = crate::app();
+
+        let exact = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/login?rd=https%3A%2F%2Fexample.com%2Ffoo")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request succeeded");
+        assert_eq!(exact.status(), StatusCode::OK);
+        let exact_body = response_text(exact).await;
+        assert!(!exact_body.contains("Invalid return URL"));
+        let exact_parser = HTMLParser::new(&exact_body);
+        let exact_form = exact_parser.find("form");
+        let exact_action =
+            decrypt_html_attribute(HTMLParser::get_attribute(exact_form, "action"));
+        assert_eq!(exact_action, "/login?rd=https%3A%2F%2Fexample.com%2Ffoo");
+
+        let sub = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/login?rd=https%3A%2F%2Fbad.example.com%2Ffoo")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request succeeded");
+        assert_eq!(sub.status(), StatusCode::OK);
+        let sub_body = response_text(sub).await;
+        assert!(!sub_body.contains("Invalid return URL"));
+        let sub_parser = HTMLParser::new(&sub_body);
+        let sub_form = sub_parser.find("form");
+        let sub_action = decrypt_html_attribute(HTMLParser::get_attribute(sub_form, "action"));
+        assert_eq!(sub_action, "/login?rd=https%3A%2F%2Fbad.example.com%2Ffoo");
+
+        let bad = app
+            .oneshot(
+                Request::builder()
+                    .uri("/login?rd=https%3A%2F%2Fbadexample.com%2Ffoo")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request succeeded");
+        assert_eq!(bad.status(), StatusCode::OK);
+        let bad_body = response_text(bad).await;
+        assert!(bad_body.contains("Invalid return URL"));
+
+        if let Some(old) = prev {
+            std::env::set_var("AUTH_DOMAIN", old);
+        } else {
+            std::env::remove_var("AUTH_DOMAIN");
+        }
+    }
 }
