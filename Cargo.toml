@@ -27,6 +27,8 @@ base64 = "0.22"
 ciborium = "0.2"
 p256 = { version = "0.13", features = ["ecdsa"] }
 sha2 = "0.10"
+url = "2"
 
 [dev-dependencies]
 tl = { version = "0.7" }
+serial_test = "3"

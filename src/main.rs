@@ -27,7 +27,7 @@ use routes::tutorial::{tutorial, tutorial_genconfig, tutorial_register_finish, t
 use users::UserWithSessionID;
 
 static TAILWIND_CSS: &str = include_str!(env!("TAILWIND_CSS"));
-static TAILWIND_CSS_SHA1: Lazy<String> = Lazy::new(|| digest(&*TAILWIND_CSS));
+static TAILWIND_CSS_SHA1: Lazy<String> = Lazy::new(|| digest(TAILWIND_CSS));
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct AppConfig {

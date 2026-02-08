@@ -55,6 +55,7 @@
   async function signInWithPasskey() {
     const username = document.getElementById('username').value.trim();
     const status = document.getElementById('passkey-status');
+    const loginReturnUrl = {{ login_rd | json_encode | safe }};
 
     if (!username) {
       status.textContent = 'Username is required for passkey login.';
@@ -66,7 +67,7 @@
     const startResponse = await fetch('/login/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, rd: '{{ login_rd }}' }),
+      body: JSON.stringify({ username, rd: loginReturnUrl }),
     });
 
     if (!startResponse.ok) {

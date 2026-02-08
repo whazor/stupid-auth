@@ -42,6 +42,7 @@ pub struct Users {
 #[derive(Debug, Clone, Copy)]
 pub enum UserError {
     IncorrectUserPassword,
+    InvalidReturnUrl,
     IOError,
     NoUsersYaml,
     InvalidYaml,
@@ -51,6 +52,7 @@ impl UserError {
     pub fn as_query_value(&self) -> &'static str {
         match self {
             UserError::IncorrectUserPassword => "incorrect_user_password",
+            UserError::InvalidReturnUrl => "invalid_return_url",
             UserError::IOError => "io_error",
             UserError::NoUsersYaml => "no_users_yaml",
             UserError::InvalidYaml => "invalid_yaml",
@@ -60,6 +62,7 @@ impl UserError {
     pub fn from_query_value(value: &str) -> Option<Self> {
         match value {
             "incorrect_user_password" => Some(UserError::IncorrectUserPassword),
+            "invalid_return_url" => Some(UserError::InvalidReturnUrl),
             "io_error" => Some(UserError::IOError),
             "no_users_yaml" => Some(UserError::NoUsersYaml),
             "invalid_yaml" => Some(UserError::InvalidYaml),
@@ -73,6 +76,9 @@ impl fmt::Display for UserError {
         match self {
             UserError::IncorrectUserPassword => {
                 write!(f, "Incorrect username or password. Please try again.")
+            }
+            UserError::InvalidReturnUrl => {
+                write!(f, "Invalid return URL. Please use an allowed redirect URL.")
             }
             UserError::IOError => write!(
                 f,

@@ -17,6 +17,7 @@ use std::{thread, time as std_time};
 use tera::Context;
 use ::time::{Duration, OffsetDateTime};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use url::Url;
 
 use crate::passwd::check_password;
 use crate::users::{get_users, User, UserError, UserWithSessionID};
@@ -113,6 +114,29 @@ fn login_url(rd: Option<&str>, error: Option<UserError>) -> String {
     }
 }
 
+fn validate_redirect(rd: Option<String>, allowed_host: &str) -> Result<Option<String>, UserError> {
+    let rd = match rd {
+        Some(value) => value.trim().to_string(),
+        None => return Ok(None),
+    };
+
+    if rd.is_empty() || rd == "#" {
+        return Ok(None);
+    }
+
+    if rd.starts_with('/') && !rd.starts_with("//") {
+        return Ok(Some(rd));
+    }
+
+    let parsed = Url::parse(&rd).map_err(|_| UserError::InvalidReturnUrl)?;
+    let host = parsed.host_str().ok_or(UserError::InvalidReturnUrl)?;
+    if host != allowed_host {
+        return Err(UserError::InvalidReturnUrl);
+    }
+
+    Ok(Some(rd))
+}
+
 fn now_ts() -> i64 {
     OffsetDateTime::now_utc().unix_timestamp()
 }
@@ -185,6 +209,17 @@ pub(crate) async fn login(
 ) -> impl IntoResponse {
     info!("showing login page, return URL: {:?}", query.rd);
 
+    let had_rd = query.rd.is_some();
+    let validated_rd = validate_redirect(query.rd, &state.config.domain).unwrap_or_default();
+    let query_error = query
+        .error
+        .and_then(|e| UserError::from_query_value(&e));
+    let error = if had_rd && validated_rd.is_none() {
+        Some(UserError::InvalidReturnUrl)
+    } else {
+        query_error
+    };
+
     let csrf_token: String = rand::rng()
         .sample_iter(&Alphanumeric)
         .take(32)
@@ -200,14 +235,14 @@ pub(crate) async fn login(
     let mut context = Context::new();
     context.insert(
         "post_url",
-        &login_url(query.rd.as_deref(), None),
+        &login_url(validated_rd.as_deref(), None),
     );
     context.insert(
         "error",
-        &query.error.and_then(|e| UserError::from_query_value(&e).map(|v| v.to_string())),
+        &error.map(|v| v.to_string()),
     );
     context.insert("csrf_token", &csrf_token);
-    context.insert("login_rd", &login_redirect(query.rd.clone()));
+    context.insert("login_rd", &login_redirect(validated_rd.clone()));
 
     (jar.add(cookie), render_template(&state, "login.html", context))
 }
@@ -220,9 +255,14 @@ pub(crate) async fn login_post(
 ) -> Response {
     info!("login post, return URL: {:?}", query.rd);
 
+    let rd = match validate_redirect(query.rd, &state.config.domain) {
+        Ok(value) => value,
+        Err(error) => return Redirect::to(&login_url(None, Some(error))).into_response(),
+    };
+
     if jar.get("csrf_token").is_none() || user.csrf_token.is_none() {
         return Redirect::to(&login_url(
-            query.rd.as_deref(),
+            rd.as_deref(),
             Some(UserError::IncorrectUserPassword),
         ))
         .into_response();
@@ -233,7 +273,7 @@ pub(crate) async fn login_post(
     let users = match get_users() {
         Ok(users) => users,
         Err(error) => {
-            return Redirect::to(&login_url(query.rd.as_deref(), Some(error))).into_response();
+            return Redirect::to(&login_url(rd.as_deref(), Some(error))).into_response();
         }
     };
 
@@ -254,7 +294,7 @@ pub(crate) async fn login_post(
         Some(user) => user,
         None => {
             return Redirect::to(&login_url(
-                query.rd.as_deref(),
+                rd.as_deref(),
                 Some(UserError::IncorrectUserPassword),
             ))
             .into_response();
@@ -262,12 +302,13 @@ pub(crate) async fn login_post(
     };
 
     jar = issue_auth_cookie(&state, jar, found);
-    let redirect = login_redirect(query.rd);
+    let redirect = login_redirect(rd);
 
     (jar, Redirect::to(&redirect)).into_response()
 }
 
 pub(crate) async fn login_start(
+    State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<LoginStartRequest>,
 ) -> impl IntoResponse {
@@ -297,7 +338,10 @@ pub(crate) async fn login_start(
 
     let token = random_b64url(16);
     let challenge = random_b64url(32);
-    let redirect = login_redirect(payload.rd);
+    let redirect = match validate_redirect(payload.rd, &state.config.domain) {
+        Ok(value) => login_redirect(value),
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid return url").into_response(),
+    };
     let mut active = ACTIVE_LOGIN_CHALLENGES
         .lock()
         .expect("active login challenges lock");
