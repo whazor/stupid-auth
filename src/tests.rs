@@ -575,6 +575,7 @@ mod test {
         let output = response_text(response).await;
 
         assert!(output.contains("Login"));
+        assert!(!output.contains("Sign in with passkey"));
         let parser = HTMLParser::new(&output);
         let form = parser.find("form");
         parser.find_child(form.clone(), "input[name=username]");
@@ -640,6 +641,43 @@ mod test {
             .expect("remote user utf8");
         assert_eq!(user, "foo");
         assert_eq!(response_text(response).await, "ok");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn login_shows_tutorial_link_when_no_users() {
+        let empty = crate::users::Users {
+            server_signing_key: None,
+            users: vec![],
+            passkeys: vec![],
+        };
+        let temp_path = std::env::temp_dir().join(format!(
+            "stupid-auth-empty-users-{}.yaml",
+            rand::random::<u64>()
+        ));
+        fs::write(&temp_path, serde_yaml::to_string(&empty).expect("yaml")).expect("write file");
+
+        let prev = std::env::var("AUTH_CONFIG_FILE").ok();
+        std::env::set_var("AUTH_CONFIG_FILE", temp_path.as_os_str());
+
+        let app = crate::app();
+        let response = app
+            .oneshot(Request::builder().uri("/login").body(Body::empty()).unwrap())
+            .await
+            .expect("request succeeded");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response_text(response).await;
+        assert!(body.contains("No users are configured yet."));
+        assert!(body.contains("/tutorial"));
+        assert!(!body.contains("Sign in with passkey"));
+
+        if let Some(old) = prev {
+            std::env::set_var("AUTH_CONFIG_FILE", old);
+        } else {
+            std::env::remove_var("AUTH_CONFIG_FILE");
+        }
+        let _ = fs::remove_file(temp_path);
     }
 
     #[tokio::test]

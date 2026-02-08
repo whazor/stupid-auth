@@ -121,23 +121,34 @@
 </div>
 
 <div class="mt-10 sm:mx-auto sm:w-full sm:max-w-sm">
-  <form class="space-y-6" action="{{ post_url }}" method="POST">
+  {% if error %}
+  {{ macros::error(message=error) }}
+  {% endif %}
+
+  {% if no_users_configured %}
+  <div class="mt-6 rounded-md border border-yellow-300 bg-yellow-50 p-4 text-sm text-yellow-800 dark:border-yellow-700 dark:bg-yellow-950 dark:text-yellow-200">
+    No users are configured yet. Start at <a href="/tutorial" class="font-semibold underline">/tutorial</a>.
+  </div>
+  {% endif %}
+
+  <form class="space-y-6 mt-6" action="{{ post_url }}" method="POST">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    {% if error %}
-    {{ macros::error(message=error) }}
+
+    {% if show_password_login or show_passkey_login %}
+    {{ macros::input(name="username", label="Username", autocomplete="username webauthn") }}
     {% endif %}
 
-    {{ macros::input(name="username", label="Username", autocomplete="username webauthn") }}
-
+    {% if show_password_login %}
     {{ macros::input(name="password", label="Password", type="password", autocomplete="current-password") }}
-
     <div>
       <button type="submit"
         class="flex w-full justify-center rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-semibold leading-6 text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">Sign
         in</button>
     </div>
+    {% endif %}
   </form>
 
+  {% if show_passkey_login %}
   <div class="mt-6">
     <button id="passkey-login-button" type="button"
       class="flex w-full justify-center rounded-md bg-gray-700 px-3 py-1.5 text-sm font-semibold leading-6 text-white shadow-sm hover:bg-gray-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-700">
@@ -145,6 +156,7 @@
     </button>
     <p id="passkey-status" class="mt-3 text-sm text-gray-700 dark:text-gray-300"></p>
   </div>
+  {% endif %}
 
   <p class="mt-10 text-center text-sm text-gray-500 dark:text-gray-400">
     Create a new user or change password? <a href="/tutorial"

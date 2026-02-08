@@ -46,8 +46,8 @@ pub(crate) struct LoginQuery {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct LoginForm {
-    username: String,
-    password: String,
+    username: Option<String>,
+    password: Option<String>,
     csrf_token: Option<String>,
 }
 
@@ -250,6 +250,22 @@ pub(crate) async fn login(
     context.insert("csrf_token", &csrf_token);
     context.insert("login_rd", &login_redirect(validated_rd.clone()));
 
+    let (show_password_login, show_passkey_login, no_users_configured) = match get_users() {
+        Ok(users) => {
+            let has_password_users = !users.users.is_empty();
+            let has_passkey_users = !users.passkeys.is_empty();
+            (
+                has_password_users,
+                has_passkey_users,
+                !has_password_users && !has_passkey_users,
+            )
+        }
+        Err(_) => (false, false, true),
+    };
+    context.insert("show_password_login", &show_password_login);
+    context.insert("show_passkey_login", &show_passkey_login);
+    context.insert("no_users_configured", &no_users_configured);
+
     (jar.add(cookie), render_template(&state, "login.html", context))
 }
 
@@ -274,6 +290,16 @@ pub(crate) async fn login_post(
         .into_response();
     }
 
+    let username = user.username.unwrap_or_default();
+    let password = user.password.unwrap_or_default();
+    if username.is_empty() || password.is_empty() {
+        return Redirect::to(&login_url(
+            rd.as_deref(),
+            Some(UserError::IncorrectUserPassword),
+        ))
+        .into_response();
+    }
+
     let mut jar = jar.remove(Cookie::new("csrf_token", ""));
 
     let users = match get_users() {
@@ -288,8 +314,7 @@ pub(crate) async fn login_post(
 
     let mut found = None;
     for known_user in users.users {
-        if known_user.username == user.username
-            && check_password(&known_user.password, user.password.as_bytes()).is_ok()
+        if known_user.username == username && check_password(&known_user.password, password.as_bytes()).is_ok()
         {
             found = Some(known_user);
             break;
