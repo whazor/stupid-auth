@@ -69,6 +69,9 @@
             tag = "latest";
             config = {
               Cmd = [ "stupid-auth" ];
+              Env = [
+                "TAILWIND_CSS=${self'.packages.stupid-auth-css}/static/tw.css"
+              ];
               Labels = {
                 "org.opencontainers.image.source" =
                   "https://github.com/whazor/stupid-auth";
@@ -84,6 +87,7 @@
               pkgs.pkgsStatic.openssl
               pkgs.pkg-config
               stupid-auth-crate
+              self'.packages.stupid-auth-css
               (pkgs.fakeNss.override {
                 extraPasswdLines = [ "kah:x:568:568::/home/kah:/bin/false" ];
                 extraGroupLines = [ "kah:x:568:" ];
@@ -162,6 +166,7 @@
                   "OPENSSL_NO_VENDOR=1"
                   "OPENSSL_LIB_DIR=${opensslStatic.dev}/lib"
                   "OPENSSL_INCLUDE_DIR=${opensslStatic.dev}/include"
+                  "TAILWIND_CSS=${self'.packages.stupid-auth-css}/static/tw.css"
                 ];
                 Cmd = [
                   "busybox"
