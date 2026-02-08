@@ -1,159 +1,42 @@
-#[macro_use]
-extern crate rocket;
-use once_cell::sync::Lazy;
-use rocket::fairing::AdHoc;
-use rocket::figment::providers::{Env, Serialized};
-use rocket::http::ContentType;
-use rocket::State;
-use rocket::{
-    http::Status,
-    request::{self, FromRequest, Outcome},
-    response::Redirect,
-    Request, Response,
+use axum::{
+    extract::{FromRef, Path, Request, State},
+    http::{header::HeaderName, StatusCode},
+    response::{Html, IntoResponse, Redirect, Response},
+    routing::get,
+    Router,
 };
-use rocket_dyn_templates::tera::Result as TeraResult;
-use rocket_dyn_templates::{tera::Value, Template};
-
-use rocket::response::{self, Responder};
-
-use rand::Rng;
-use rocket::http::CookieJar;
+use axum_extra::extract::cookie::{Cookie, Key, PrivateCookieJar};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use serde_yaml::from_str;
-
 use sha256::digest;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
-use std::{collections::HashMap, fs};
+use tera::{Result as TeraResult, Tera, Value};
 
 #[cfg(test)]
 mod tests;
 
-mod users;
-use users::User;
-
 mod passwd;
-
 mod routes;
+mod users;
+
 use routes::login::{login, login_post};
 use routes::tutorial::{tutorial, tutorial_genconfig};
+use users::UserWithSessionID;
 
-use crate::users::UserWithSessionID;
+static TAILWIND_CSS: Lazy<String> = Lazy::new(|| {
+    let path = std::env::var("TAILWIND_CSS").unwrap_or_else(|_| "static/tw.css".to_string());
+    std::fs::read_to_string(path).unwrap_or_default()
+});
+static TAILWIND_CSS_SHA1: Lazy<String> = Lazy::new(|| digest(&*TAILWIND_CSS));
 
-#[get("/")]
-fn index() -> &'static str {
-    "Hello, world!"
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(crate) struct AppConfig {
+    pub(crate) domain: String,
+    pub(crate) cookie_expire: u32,
 }
 
-#[derive(Debug)]
-struct OriginalURL(String);
-
-#[catch(500)]
-fn internal_error(_req: &Request) -> String {
-    "Whoops! Looks like we messed up.".to_string()
-}
-
-#[catch(404)]
-fn not_found(req: &Request) -> String {
-    format!("I couldn't find '{}'. Try something else?", req.uri())
-}
-
-#[rocket::async_trait]
-impl<'r> FromRequest<'r> for OriginalURL {
-    type Error = ();
-
-    async fn from_request(req: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
-        for header in req.headers().iter() {
-            println!("{}: {:?}", header.name(), header.value());
-        }
-        let host = req.headers().get_one("x-forwarded-host");
-        let proto = req.headers().get_one("x-forwarded-proto");
-        let uri = req.headers().get_one("x-forwarded-uri");
-
-        let full_path: Option<String> =
-            if let (Some(host), Some(proto), Some(uri)) = (host, proto, uri) {
-                Some(format!("{}://{}{}", proto, host, uri))
-            } else {
-                None
-            };
-        match full_path {
-            Some(full_path) => Outcome::Success(OriginalURL(full_path)),
-            None => Outcome::Success(OriginalURL("".to_string())),
-        }
-    }
-}
-
-struct AuthSuccess {
-    user: User,
-}
-
-impl<'r> Responder<'r, 'static> for AuthSuccess {
-    fn respond_to(self, req: &'r Request<'_>) -> response::Result<'static> {
-        Response::build_from("ok".respond_to(req)?)
-            .raw_header("Remote-User", self.user.username)
-            .ok()
-    }
-}
-
-#[get("/auth")]
-fn auth(cookies: &CookieJar<'_>, sessions: &State<SessionState>) -> Result<AuthSuccess, Status> {
-    if let Some(user) = cookies.get_private("stupid_auth_user") {
-        let user: UserWithSessionID = from_str(user.value()).expect("invalid user");
-        let session_id = user.session_id;
-        let user = user.user;
-        println!("user: {:?}", user.username);
-        let store = sessions.store.lock().unwrap();
-        if store.contains(&session_id) {
-            return Ok(AuthSuccess { user });
-        }
-    }
-    // return 401
-    Err(Status::Unauthorized)
-}
-
-#[get("/logout")]
-fn logout(cookies: &CookieJar<'_>, sessions: &State<SessionState>) -> Redirect {
-    if let Some(user) = cookies.get_private("stupid_auth_user") {
-        if let Ok(user) = from_str::<UserWithSessionID>(user.value()) {
-            let session_id = user.session_id;
-            sessions.store.lock().unwrap().remove(&session_id);
-        }
-    }
-
-    cookies.remove_private("stupid_auth_user");
-    Redirect::to(uri!(index))
-}
-
-static TAILWIND_CSS: &str = include_str!(env!("TAILWIND_CSS"));
-static TAILWIND_CSS_SHA1: Lazy<String> = Lazy::new(|| digest(TAILWIND_CSS));
-
-#[get("/public/<file..>")]
-fn public(file: std::path::PathBuf) -> Option<(ContentType, Vec<u8>)> {
-    match file.to_str() {
-        Some("tw.css") => Some((ContentType::CSS, TAILWIND_CSS.as_bytes().to_vec())),
-        _ => None,
-    }
-}
-
-pub fn hash_public(args: &HashMap<String, Value>) -> TeraResult<Value> {
-    let name = args.get("name").expect("name is required");
-    let name = name.as_str().expect("name must be a string");
-    match name {
-        "tw.css" => {
-            // use static
-            Ok(TAILWIND_CSS_SHA1.clone().into())
-        }
-        _ => Err("unknown file".into()),
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct AppConfig {
-    domain: String,
-    // cookie expire time is in amount of days
-    cookie_expire: u32,
-}
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -163,70 +46,195 @@ impl Default for AppConfig {
     }
 }
 
-struct SessionState {
-    last: AtomicU32,
-    store: Arc<Mutex<HashSet<u32>>>,
+impl AppConfig {
+    fn from_env() -> Self {
+        let mut config = Self::default();
+
+        if let Ok(domain) = std::env::var("AUTH_DOMAIN") {
+            if !domain.is_empty() {
+                config.domain = domain;
+            }
+        }
+
+        if let Ok(cookie_expire) = std::env::var("AUTH_COOKIE_EXPIRE") {
+            if let Ok(parsed) = cookie_expire.parse::<u32>() {
+                config.cookie_expire = parsed;
+            }
+        }
+
+        config
+    }
 }
 
-#[launch]
-fn rocket() -> _ {
-    // we load all templates via string, so it doesn't matter where we put them
-    fs::create_dir_all("/tmp/templates").unwrap();
+struct SessionState {
+    last: AtomicU32,
+    store: Mutex<HashSet<u32>>,
+}
 
-    let rng = rand::thread_rng();
-    let secret_key = rng
-        .sample_iter(rand::distributions::Alphanumeric)
-        .take(32)
-        .map(char::from)
-        .collect::<String>();
-    let secret_key: &[u8] = secret_key.as_bytes();
+#[derive(Clone)]
+pub(crate) struct AppState {
+    pub(crate) config: AppConfig,
+    pub(crate) sessions: Arc<SessionState>,
+    pub(crate) tera: Arc<Tera>,
+    pub(crate) key: Key,
+}
 
-    let config = rocket::Config::figment()
-        .merge(Serialized::defaults(AppConfig::default()))
-        .merge(("template_dir", "/tmp/templates"))
-        .merge(("address", "0.0.0.0"))
-        .merge(("secret_key", secret_key))
-        .merge(("shutdown.signals", vec!["term", "hup", "int"]))
-        .merge(("shutdown.grace", 1))
-        .merge(Env::prefixed("AUTH_").global());
+impl FromRef<AppState> for Key {
+    fn from_ref(input: &AppState) -> Self {
+        input.key.clone()
+    }
+}
 
-    rocket::custom(config)
-        .manage(SessionState {
-            last: AtomicU32::new(0),
-            // store: HashSet::new(),
-            store: Arc::new(Mutex::new(HashSet::new())),
-        })
-        .mount(
-            "/",
-            routes![
-                index,
-                public,
-                tutorial,
-                tutorial_genconfig,
-                auth,
-                login,
-                login_post,
-                logout
-            ],
+struct HashPublicFn;
+
+impl tera::Function for HashPublicFn {
+    fn call(&self, args: &std::collections::HashMap<String, Value>) -> TeraResult<Value> {
+        let name = args
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| tera::Error::msg("name is required"))?;
+
+        match name {
+            "tw.css" => Ok(TAILWIND_CSS_SHA1.clone().into()),
+            _ => Err(tera::Error::msg("unknown file")),
+        }
+    }
+}
+
+fn init_tera() -> Tera {
+    let mut tera = Tera::default();
+    tera.add_raw_templates(vec![
+        ("_macros.html", include_str!("../templates/_macros.html.tera")),
+        ("_base.html", include_str!("../templates/_base.html.tera")),
+        (
+            "tutorial.html",
+            include_str!("../templates/tutorial.html.tera"),
+        ),
+        ("login.html", include_str!("../templates/login.html.tera")),
+    ])
+    .expect("valid templates");
+    tera.register_function("hash_public", HashPublicFn);
+    tera
+}
+
+fn init_logger() {
+    let _ = fern::Dispatch::new()
+        .level(log::LevelFilter::Info)
+        .chain(std::io::stdout())
+        .apply();
+}
+
+pub(crate) fn render_template(state: &AppState, template: &str, context: tera::Context) -> Response {
+    match state.tera.render(template, &context) {
+        Ok(body) => Html(body).into_response(),
+        Err(error) => {
+            log::error!("template render failed: {error}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Whoops! Looks like we messed up.").into_response()
+        }
+    }
+}
+
+async fn index() -> &'static str {
+    "Hello, world!"
+}
+
+async fn auth(jar: PrivateCookieJar, State(state): State<AppState>) -> Result<Response, StatusCode> {
+    let cookie = jar
+        .get("stupid_auth_user")
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let user_with_session: UserWithSessionID =
+        serde_yaml::from_str(cookie.value()).map_err(|_| StatusCode::UNAUTHORIZED)?;
+
+    let is_valid = {
+        let store = state.sessions.store.lock().expect("session lock");
+        store.contains(&user_with_session.session_id)
+    };
+
+    if !is_valid {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let header_name = HeaderName::from_static("remote-user");
+    Ok(([(header_name, user_with_session.user.username)], "ok").into_response())
+}
+
+async fn logout(jar: PrivateCookieJar, State(state): State<AppState>) -> impl IntoResponse {
+    if let Some(cookie) = jar.get("stupid_auth_user") {
+        if let Ok(user) = serde_yaml::from_str::<UserWithSessionID>(cookie.value()) {
+            state
+                .sessions
+                .store
+                .lock()
+                .expect("session lock")
+                .remove(&user.session_id);
+        }
+    }
+
+    let jar = jar.remove(Cookie::new("stupid_auth_user", ""));
+    (jar, Redirect::to("/"))
+}
+
+async fn public(Path(file): Path<String>) -> Response {
+    if file == "tw.css" {
+        return (
+            [(axum::http::header::CONTENT_TYPE, "text/css; charset=utf-8")],
+            TAILWIND_CSS.clone(),
         )
-        .register("/", catchers![internal_error, not_found])
-        .attach(AdHoc::config::<AppConfig>())
-        .attach(Template::custom(|engines| {
-            engines
-                .tera
-                .add_raw_templates(vec![
-                    (
-                        "_macros.html",
-                        include_str!("../templates/_macros.html.tera"),
-                    ),
-                    ("_base.html", include_str!("../templates/_base.html.tera")),
-                    (
-                        "tutorial.html",
-                        include_str!("../templates/tutorial.html.tera"),
-                    ),
-                    ("login.html", include_str!("../templates/login.html.tera")),
-                ])
-                .unwrap();
-            engines.tera.register_function("hash_public", hash_public);
-        }))
+            .into_response();
+    }
+
+    StatusCode::NOT_FOUND.into_response()
+}
+
+async fn not_found(request: Request) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        format!("I couldn't find '{}'. Try something else?", request.uri()),
+    )
+        .into_response()
+}
+
+pub(crate) fn app() -> Router {
+    let config = AppConfig::from_env();
+
+    let key = Key::generate();
+
+    let state = AppState {
+        config,
+        sessions: Arc::new(SessionState {
+            last: AtomicU32::new(0),
+            store: Mutex::new(HashSet::new()),
+        }),
+        tera: Arc::new(init_tera()),
+        key,
+    };
+
+    Router::new()
+        .route("/", get(index))
+        .route("/public/{*file}", get(public))
+        .route("/tutorial", get(tutorial).post(tutorial_genconfig))
+        .route("/auth", get(auth))
+        .route("/login", get(login).post(login_post))
+        .route("/logout", get(logout))
+        .fallback(not_found)
+        .with_state(state)
+}
+
+#[tokio::main]
+async fn main() {
+    init_logger();
+
+    let app = app();
+
+    let bind_addr = std::env::var("AUTH_ADDRESS").unwrap_or_else(|_| "0.0.0.0".to_string());
+    let bind_port = std::env::var("AUTH_PORT")
+        .ok()
+        .and_then(|v| v.parse::<u16>().ok())
+        .unwrap_or(8000);
+    let listener = tokio::net::TcpListener::bind((bind_addr.as_str(), bind_port))
+        .await
+        .expect("bind listener");
+
+    axum::serve(listener, app).await.expect("serve app");
 }

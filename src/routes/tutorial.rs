@@ -1,53 +1,50 @@
-use rocket::form::Form;
-use rocket_dyn_templates::{context, Template};
-
+use axum::{extract::State, response::Response, Form};
 use serde::{Deserialize, Serialize};
+use tera::Context;
 
-use crate::{passwd::generate_password, users::{User, Users}};
-use serde_yaml::to_string;
+use crate::{
+    passwd::generate_password,
+    render_template,
+    users::{User, Users},
+    AppState,
+};
 
-#[get("/tutorial")]
-pub(crate) fn tutorial() -> Template {
-    Template::render(
-        "tutorial.html",
-        context! {
-            post_url: uri!(tutorial_genconfig()),
-            username: "",
-            password: "",
-        },
-    )
-}
-
-#[derive(Clone, FromForm, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 pub struct CreateUser {
     pub username: String,
     pub uuid: Option<String>,
     pub password: Option<String>,
 }
 
-#[post("/tutorial", data = "<user>")]
-pub(crate) fn tutorial_genconfig(user: Form<CreateUser>) -> Template {
-    let user = user.into_inner();
+pub(crate) async fn tutorial(State(state): State<AppState>) -> Response {
+    let mut context = Context::new();
+    context.insert("post_url", "/tutorial");
+    context.insert("username", "");
+    context.insert("password", "");
+    render_template(&state, "tutorial.html", context)
+}
+
+pub(crate) async fn tutorial_genconfig(
+    State(state): State<AppState>,
+    Form(user): Form<CreateUser>,
+) -> Response {
     let password = user
         .password
-        .clone()
+        .as_ref()
         .map(|p| generate_password(p.as_bytes()).expect("password"));
 
-    
-    let config = to_string(&Users {
+    let config = serde_yaml::to_string(&Users {
         users: vec![User {
             username: user.username.clone(),
-            password: password.unwrap(),
+            password: password.expect("password is required"),
         }],
-    });
+    })
+    .expect("valid yaml");
 
-    Template::render(
-        "tutorial.html",
-        context! {
-            config: config.unwrap(),
-            post_url: uri!(tutorial_genconfig()),
-            username: user.username,
-            password: user.password,
-        },
-    )
+    let mut context = Context::new();
+    context.insert("config", &config);
+    context.insert("post_url", "/tutorial");
+    context.insert("username", &user.username);
+    context.insert("password", &user.password);
+    render_template(&state, "tutorial.html", context)
 }

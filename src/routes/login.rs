@@ -1,121 +1,167 @@
+use axum::{
+    extract::{Query, State},
+    response::{IntoResponse, Redirect, Response},
+    Form,
+};
+use axum_extra::extract::cookie::{Cookie, Expiration, PrivateCookieJar};
 use log::info;
-
-use rocket::State;
-use rocket::time::{OffsetDateTime, Duration};
-use rocket::{form::Form, response::Redirect};
-use rocket_dyn_templates::{context, Template};
-
-use rand::Rng;
-use rocket::http::{CookieJar, Cookie};
-
-use serde_yaml::to_string;
-
-use std::{thread, time};
-
-use crate::users::User;
-use crate::users::UserError;
-use crate::users::{get_users, UserWithSessionID};
-use crate::{AppConfig, SessionState};
+use rand::{distr::Alphanumeric, Rng};
+use serde::Deserialize;
+use serde_urlencoded;
+use std::{thread, time as std_time};
+use tera::Context;
+use ::time::{Duration, OffsetDateTime};
 
 use crate::passwd::check_password;
+use crate::users::{get_users, UserError, UserWithSessionID};
+use crate::{render_template, AppState};
 
-// get referer
-#[get("/login?<rd>&<error>")]
-pub(crate) fn login(
-    rd: Option<String>, 
-    error: Option<UserError>,
-    cookies: &CookieJar<'_>,
-) -> Template {
-    info!("showing login page, return URL: {:?}", rd);
+#[derive(Debug, Deserialize)]
+pub(crate) struct LoginQuery {
+    rd: Option<String>,
+    error: Option<String>,
+}
 
-    println!("{:?}", error);
-    // setup csrf token
-    let rng = rand::thread_rng();
-    let csrf_token: String = rng
-        .sample_iter(rand::distributions::Alphanumeric)
+#[derive(Debug, Deserialize)]
+pub(crate) struct LoginForm {
+    username: String,
+    password: String,
+    csrf_token: Option<String>,
+}
+
+fn login_url(rd: Option<&str>, error: Option<UserError>) -> String {
+    let mut params: Vec<(&str, String)> = Vec::new();
+
+    if let Some(rd) = rd {
+        params.push(("rd", rd.to_string()));
+    }
+
+    if let Some(error) = error {
+        params.push(("error", error.as_query_value().to_string()));
+    }
+
+    if params.is_empty() {
+        "/login".to_string()
+    } else {
+        format!(
+            "/login?{}",
+            serde_urlencoded::to_string(params).expect("valid query")
+        )
+    }
+}
+
+pub(crate) async fn login(
+    State(state): State<AppState>,
+    Query(query): Query<LoginQuery>,
+    jar: PrivateCookieJar,
+) -> impl IntoResponse {
+    info!("showing login page, return URL: {:?}", query.rd);
+
+    let csrf_token: String = rand::rng()
+        .sample_iter(&Alphanumeric)
         .take(32)
         .map(char::from)
         .collect();
-    let mut cookie = rocket::http::Cookie::new("csrf_token", csrf_token.clone());
-    let now = OffsetDateTime::now_utc();
-    cookie.set_expires(now + Duration::minutes(10));
-    cookies.add_private(cookie);
-    Template::render(
-        "login.html",
-        context! {
-           post_url: uri!(login_post(rd)),
-           error: error.map(|e| e.to_string()),
-           csrf_token: csrf_token,
-        },
-    )
+
+    let cookie = Cookie::build(("csrf_token", csrf_token.clone()))
+        .expires(Expiration::DateTime(
+            OffsetDateTime::now_utc() + Duration::minutes(10),
+        ))
+        .build();
+
+    let mut context = Context::new();
+    context.insert(
+        "post_url",
+        &login_url(query.rd.as_deref(), None),
+    );
+    context.insert(
+        "error",
+        &query.error.and_then(|e| UserError::from_query_value(&e).map(|v| v.to_string())),
+    );
+    context.insert("csrf_token", &csrf_token);
+
+    (jar.add(cookie), render_template(&state, "login.html", context))
 }
 
-#[post("/login?<rd>", data = "<user>")]
-pub(crate) fn login_post(
-    rd: Option<String>,
-    user: Form<User>,
-    cookies: &CookieJar<'_>,
-    config: &State<AppConfig>,
-    sessions: &State<SessionState>,
-) -> Redirect {
-    info!("login post, return URL: {:?}", rd);
-    // check csrf token
-    let csrf_token = cookies.get_private("csrf_token");
-    if csrf_token.is_none() {
-        return Redirect::to(uri!(login(rd, Some(UserError::IncorrectUserPassword))));
+pub(crate) async fn login_post(
+    State(state): State<AppState>,
+    Query(query): Query<LoginQuery>,
+    jar: PrivateCookieJar,
+    Form(user): Form<LoginForm>,
+) -> Response {
+    info!("login post, return URL: {:?}", query.rd);
+
+    if jar.get("csrf_token").is_none() || user.csrf_token.is_none() {
+        return Redirect::to(&login_url(
+            query.rd.as_deref(),
+            Some(UserError::IncorrectUserPassword),
+        ))
+        .into_response();
     }
-    // delete csrf token
-    cookies.remove_private("csrf_token");
 
-    let users = get_users();
-    if users.is_err() {
-        return Redirect::to(uri!(login(rd, Some(users.err().unwrap()))))
-    }
-    let users = users.unwrap();
+    let mut jar = jar.remove(Cookie::new("csrf_token", ""));
 
-    // check if in users
-    let mut found = Option::None;
+    let users = match get_users() {
+        Ok(users) => users,
+        Err(error) => {
+            return Redirect::to(&login_url(query.rd.as_deref(), Some(error))).into_response();
+        }
+    };
 
-    // add random delay to prevent timing attacks
-    let mut rng = rand::thread_rng();
-    let delay = rng.gen_range(0..1000);
-    thread::sleep(time::Duration::from_millis(delay));
+    let delay = rand::rng().random_range(0..1000);
+    thread::sleep(std_time::Duration::from_millis(delay));
 
-    let user = user.into_inner();
-    for u in users.users {
-        if u.username == user.username {
-            let check = check_password(&u.password, user.password.as_bytes());
-            if check.is_ok() {
-                found = Option::Some(u);
-            }
+    let mut found = None;
+    for known_user in users.users {
+        if known_user.username == user.username
+            && check_password(&known_user.password, user.password.as_bytes()).is_ok()
+        {
+            found = Some(known_user);
+            break;
         }
     }
 
-    if found.is_none() {
-        return Redirect::to(uri!(login(rd, Some(UserError::IncorrectUserPassword))));
-    }
+    let found = match found {
+        Some(user) => user,
+        None => {
+            return Redirect::to(&login_url(
+                query.rd.as_deref(),
+                Some(UserError::IncorrectUserPassword),
+            ))
+            .into_response();
+        }
+    };
 
-    // increase session id
-    let session_id = sessions
-        .last
-        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    // add session id to session
-    sessions.store.lock().unwrap().insert(session_id);
+    let session_id = state.sessions.last.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    state
+        .sessions
+        .store
+        .lock()
+        .expect("session lock")
+        .insert(session_id);
 
-    let found = UserWithSessionID {
-        user: found.unwrap(),
+    let stored_user = UserWithSessionID {
+        user: found,
         session_id,
     };
-    
-    cookies.add_private(
-        Cookie::build(("stupid_auth_user", to_string(&found).unwrap()))
-            .secure(true)
-            .domain(config.domain.clone())
-            .expires(OffsetDateTime::now_utc() + Duration::days(config.cookie_expire.into()))
-    );
-    // when # or empty, redirect to /
-    Redirect::to(
-        rd.filter(|val| !val.is_empty() && val != "#")
-          .unwrap_or("/".to_string())
-    )
+
+    let cookie = Cookie::build((
+        "stupid_auth_user",
+        serde_yaml::to_string(&stored_user).expect("valid yaml"),
+    ))
+    .secure(true)
+    .domain(state.config.domain.clone())
+    .expires(Expiration::DateTime(
+        OffsetDateTime::now_utc() + Duration::days(i64::from(state.config.cookie_expire)),
+    ))
+    .build();
+
+    jar = jar.add(cookie);
+
+    let redirect = query
+        .rd
+        .filter(|val| !val.is_empty() && val != "#")
+        .unwrap_or_else(|| "/".to_string());
+
+    (jar, Redirect::to(&redirect)).into_response()
 }
