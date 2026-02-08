@@ -1217,6 +1217,7 @@ dependencies = [
  "argon2",
  "axum",
  "axum-extra",
+ "base64",
  "fern",
  "http-body-util",
  "log",

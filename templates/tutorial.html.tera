@@ -6,21 +6,162 @@
   function formIsValid() {
     const username = document.getElementById('username').value;
     const password = document.getElementById('password').value;
-  
-    const isValid =
-      // username always required
-      username.length > 0 &&
-      // password required
-      password.length > 0;
-      
+
+    const isValid = username.length > 0 && password.length > 0;
     document.getElementById('submit').disabled = !isValid;
   }
+
+  function generateSigningKey() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    const random = new Uint8Array(64);
+    crypto.getRandomValues(random);
+    let key = '';
+    for (let i = 0; i < random.length; i += 1) {
+      key += chars[random[i] % chars.length];
+    }
+    return key;
+  }
+
+  function ensureTutorialSigningKey() {
+    let key = localStorage.getItem('tutorial_server_signing_key');
+    if (!key) {
+      key = generateSigningKey();
+      localStorage.setItem('tutorial_server_signing_key', key);
+    }
+    return key;
+  }
+
+  function b64urlToBytes(input) {
+    const normalized = input.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+    const raw = atob(padded);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i += 1) {
+      bytes[i] = raw.charCodeAt(i);
+    }
+    return bytes;
+  }
+
+  function bytesToB64url(bytes) {
+    let binary = '';
+    bytes.forEach((b) => {
+      binary += String.fromCharCode(b);
+    });
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  function normalizeCreationOptions(options) {
+    return {
+      ...options,
+      challenge: b64urlToBytes(options.challenge),
+      user: {
+        ...options.user,
+        id: b64urlToBytes(options.user.id),
+      },
+      excludeCredentials: (options.excludeCredentials || []).map((cred) => ({
+        ...cred,
+        id: b64urlToBytes(cred.id),
+      })),
+    };
+  }
+
+  function credentialToJSON(value) {
+    if (value instanceof ArrayBuffer) {
+      return bytesToB64url(new Uint8Array(value));
+    }
+    if (value instanceof Uint8Array) {
+      return bytesToB64url(value);
+    }
+    if (Array.isArray(value)) {
+      return value.map(credentialToJSON);
+    }
+    if (value && typeof value === 'object') {
+      const out = {};
+      Object.keys(value).forEach((k) => {
+        out[k] = credentialToJSON(value[k]);
+      });
+      return out;
+    }
+    return value;
+  }
+
+  async function registerPasskey() {
+    const username = document.getElementById('passkey-username').value.trim();
+    const status = document.getElementById('passkey-status');
+
+    if (!username) {
+      status.textContent = 'Username is required.';
+      return;
+    }
+
+    status.textContent = 'Starting registration...';
+    const signingKey = ensureTutorialSigningKey();
+
+    const startResponse = await fetch('/tutorial/register/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username,
+        server_signing_key: signingKey,
+      }),
+    });
+
+    if (!startResponse.ok) {
+      status.textContent = `Start failed (${startResponse.status}).`;
+      return;
+    }
+
+    const start = await startResponse.json();
+    localStorage.setItem('tutorial_reg_token', start.token);
+
+    try {
+      const credential = await navigator.credentials.create({
+        publicKey: normalizeCreationOptions(start.publicKeyOptions),
+      });
+
+      const finishResponse = await fetch('/tutorial/register/finish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: localStorage.getItem('tutorial_reg_token'),
+          credential: credentialToJSON(credential),
+          server_signing_key: signingKey,
+        }),
+      });
+
+      localStorage.removeItem('tutorial_reg_token');
+
+      if (!finishResponse.ok) {
+        status.textContent = `Finish failed (${finishResponse.status}).`;
+        return;
+      }
+
+      const html = await finishResponse.text();
+      document.open();
+      document.write(html);
+      document.close();
+    } catch (error) {
+      localStorage.removeItem('tutorial_reg_token');
+      status.textContent = `Passkey registration cancelled or failed: ${error}`;
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    localStorage.removeItem('tutorial_reg_token');
+    ensureTutorialSigningKey();
+
+    const button = document.getElementById('register-passkey-button');
+    if (button) {
+      button.addEventListener('click', registerPasskey);
+    }
+  });
 </script>
 
 <div>
   <h2 class="mt-10 text-2xl font-bold leading-9 tracking-tight text-gray-900 dark:text-gray-200">
     Tutorial
   </h2>
+
   <p class="my-10 text-gray-800 dark:text-gray-200">
     To get started, create a file named <code>users.yaml</code> in the application
     root directory. In the docker container this would be <code>/users.yaml</code>.
@@ -31,14 +172,12 @@
   </p>
 
   <form action="{{ post_url }}" method="POST">
-
     <div class="m-6">
     {{ macros::input(name="username", label="Username", placeholder="admin", autocomplete="username webauthn", onkeyup="formIsValid()") }}
     </div>
     <div class="m-6">
     {{ macros::input(name="password", label="Password", type="password", autocomplete="current-password", onkeyup="formIsValid()") }}
     </div>
-
 
     {{ macros::submit(label="Generate config file", disabled=true) }}
 
@@ -50,7 +189,6 @@
     <pre class="my-10 text-gray-800 dark:text-gray-200">{{ config }}</pre>
     {% endif %}
 
-    {# you can safely share your password #}
     <p class="my-10 text-gray-800 dark:text-gray-200">
       <strong>Note:</strong> It is safe to share your user config file with others.
 
@@ -62,5 +200,47 @@
     </p>
   </form>
 
+  <hr class="my-10 border-gray-300 dark:border-gray-700" />
+  <h3 class="text-xl font-semibold text-gray-900 dark:text-gray-100">Passkey Setup</h3>
+  <p class="my-2 text-gray-800 dark:text-gray-200">
+    Passkeys are bound to the relying party domain (RP ID): <code>{{ detected_rp_id }}</code>.
+  </p>
+  {% if passkey_warnings | length > 0 %}
+  <div class="my-4 space-y-2">
+    {% for warning in passkey_warnings %}
+      {{ macros::warning(message=warning) }}
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if passkey_mode %}
+  <p class="my-4 text-gray-800 dark:text-gray-200">
+    Existing <code>server_signing_key</code> detected in <code>users.yaml</code>. Register a passkey and append the generated passkey block.
+  </p>
+  {% else %}
+  <p class="my-4 text-gray-800 dark:text-gray-200">
+    No <code>server_signing_key</code> found in <code>users.yaml</code>. A bootstrap signing key is stored in localStorage for this browser and used for first passkey setup.
+  </p>
+  {% endif %}
+
+  <div class="m-6">
+    {{ macros::input(name="passkey-username", label="Passkey username", placeholder="admin", autocomplete="username webauthn") }}
+  </div>
+
+  <div class="m-6">
+    <button id="register-passkey-button" type="button" class="mt-4 flex w-full justify-center rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-semibold leading-6 text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
+      Register passkey
+    </button>
+    <p id="passkey-status" class="mt-4 text-sm text-gray-700 dark:text-gray-300"></p>
+  </div>
+
+  {% if register_result %}
+  <h3 class="mt-10 text-2xl font-bold leading-9 tracking-tight text-gray-900 dark:text-gray-200">
+    {{ register_result }}
+  </h3>
+  {% endif %}
+
+  {% if append_config %}
+  <pre class="my-10 text-gray-800 dark:text-gray-200">{{ append_config }}</pre>
+  {% endif %}
 </div>
 {% endblock %}

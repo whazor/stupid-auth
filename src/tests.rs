@@ -131,6 +131,8 @@ mod test {
 
         let output = response_text(response).await;
         assert!(output.contains("Create your first user by filling in the following fields"));
+        assert!(output.contains("Passkeys require HTTPS (except localhost)"));
+        assert!(output.contains("RP ID"));
 
         let parser = HTMLParser::new(&output);
 
@@ -143,6 +145,25 @@ mod test {
         assert_eq!(url, "/tutorial");
         let method = HTMLParser::get_attribute(form, "method");
         assert_eq!(method, "POST");
+    }
+
+    #[tokio::test]
+    async fn tutorial_shows_ip_host_warning() {
+        let app = crate::app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/tutorial")
+                    .header(header::HOST, "127.0.0.1:8000")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request succeeded");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let output = response_text(response).await;
+        assert!(output.contains("Using an IP host can break passkey flows"));
     }
 
     #[tokio::test]
@@ -174,6 +195,10 @@ mod test {
         let decoded = decrypt_html_attribute(code);
 
         let config: serde_yaml::Value = serde_yaml::from_str(&decoded).expect("valid yaml");
+        let signing_key = config["server_signing_key"]
+            .as_str()
+            .expect("server signing key");
+        assert_eq!(signing_key.len(), 64);
         let users = config["users"].as_sequence().expect("valid sequence");
         assert_eq!(users.len(), 1);
         let user = &users[0];
@@ -185,6 +210,44 @@ mod test {
         argon2
             .verify_password("bar".as_bytes(), &parsed_hash)
             .expect("valid password");
+    }
+
+    #[tokio::test]
+    async fn tutorial_register_start_accepts_bootstrap_signing_key() {
+        let app = crate::app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/tutorial/register/start")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"username":"foo","server_signing_key":"abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .expect("request succeeded");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn tutorial_register_start_requires_signing_key_when_bootstrapping() {
+        let app = crate::app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/tutorial/register/start")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"username":"foo"}"#))
+                    .unwrap(),
+            )
+            .await
+            .expect("request succeeded");
+
+        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
     }
 
     #[tokio::test]

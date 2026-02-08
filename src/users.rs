@@ -10,6 +10,16 @@ pub struct User {
     pub password: String,
 }
 
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+pub struct PasskeyUser {
+    pub username: String,
+    pub credential_id: String,
+    pub raw_id: String,
+    pub client_data_json: String,
+    pub attestation_object: String,
+    pub signature: String,
+}
+
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct UserWithSessionID {
     pub user: User,
@@ -18,7 +28,11 @@ pub struct UserWithSessionID {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct Users {
+    #[serde(default)]
+    pub server_signing_key: Option<String>,
     pub users: Vec<User>,
+    #[serde(default)]
+    pub passkeys: Vec<PasskeyUser>,
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -2,7 +2,7 @@ use axum::{
     extract::{FromRef, Path, Request, State},
     http::{header::HeaderName, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use axum_extra::extract::cookie::{Cookie, Key, PrivateCookieJar};
@@ -22,7 +22,7 @@ mod routes;
 mod users;
 
 use routes::login::{login, login_post};
-use routes::tutorial::{tutorial, tutorial_genconfig};
+use routes::tutorial::{tutorial, tutorial_genconfig, tutorial_register_finish, tutorial_register_start};
 use users::UserWithSessionID;
 
 static TAILWIND_CSS: Lazy<String> = Lazy::new(|| {
@@ -214,6 +214,8 @@ pub(crate) fn app() -> Router {
         .route("/", get(index))
         .route("/public/{*file}", get(public))
         .route("/tutorial", get(tutorial).post(tutorial_genconfig))
+        .route("/tutorial/register/start", post(tutorial_register_start))
+        .route("/tutorial/register/finish", post(tutorial_register_finish))
         .route("/auth", get(auth))
         .route("/login", get(login).post(login_post))
         .route("/logout", get(logout))
