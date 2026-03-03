@@ -1,0 +1,7 @@
+@import "tailwindcss";
+
+@source "./templates/**/*.html.tera";
+@source "./templates/**/*.tera";
+@source "./static/**/*.html";
+@source "./src/**/*.html";
+@source "./src/**/*.js";
