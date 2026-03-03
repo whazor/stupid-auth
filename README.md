@@ -1,64 +1,102 @@
 # stupid-auth
 
-## What is this?
+`stupid-auth` is a small forward-auth service for homelabs.
 
-This is a simple authentication server that uses secure cookies to authenticate users. It is meant for home lab use and is not meant to be used in production.
+It is built for simple operations:
+- users in a YAML file
+- sessions in memory
+- no external database
 
-Currently, it only supports forward auth from NGINX, and can be used to add authentication to services that do not support auth, or support auth via header.
+## What It Does
 
-## Is this secure?
+- `GET /login` + `POST /login` for username/password login
+- `POST /login/start` + `POST /login/finish` for passkey login
+- `GET /auth` for forward-auth checks (`401` or `Remote-User` header)
+- `GET /logout` to clear auth session
+- `GET /tutorial` to generate/bootstrap config
 
-Every authentication system makes different tradeoffs. This system is designed to be easy to use and secure enough for home lab use.
+## Quick Start
 
-The goal is to take the tradeoffs that only make sense for a home lab environment. Using this in an enterprise setting would be stupid. Can you imagine a sys admin restarting the auth server because one user forgot their password?
+1. Run `stupid-auth` behind HTTPS on `auth.<your-domain>`.
+2. Set `AUTH_DOMAIN` to your cookie domain (for example `nanne.casa`).
+3. Mount `users.yaml` and point `AUTH_CONFIG_FILE` to it.
+4. Open `/tutorial` and create your initial config.
+5. Configure your reverse proxy/app ingress to call `/auth` for protected routes.
 
-### Are we secure yet?
+## Minimal Runtime Config
 
-To check:
+Required in practice:
+- `AUTH_DOMAIN`
+- `AUTH_CONFIG_FILE`
 
-- [ ] [A01:2021-Broken Access Control](https://owasp.org/Top10/A01_2021-Broken_Access_Control/)
-- [ ] [A02:2021-Cryptographic Failures](https://owasp.org/Top10/A02_2021-Cryptographic_Failures/)
-- [ ] [A03:2021-Injection](https://owasp.org/Top10/A03_2021-Injection/)
-- [ ] [A04:2021-Insecure Design](https://owasp.org/Top10/A04_2021-Insecure_Design/)
-- [ ] [A05:2021-Security Misconfiguration](https://owasp.org/Top10/A05_2021-Security_Misconfiguration/)
-- [ ] [A06:2021-Vulnerable and Outdated Components](https://owasp.org/Top10/A06_2021-Vulnerable_and_Outdated_Components/)
-- [ ] [A07:2021-Identification and Authentication Failures](https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures/)
-- [ ] [A08:2021-Software and Data Integrity Failures](https://owasp.org/Top10/A08_2021-Software_and_Data_Integrity_Failures/)
-- [ ] [A09:2021-Security Logging and Monitoring Failures](https://owasp.org/Top10/A09_2021-Security_Logging_and_Monitoring_Failures/)
-- [ ] [A10:2021-Server-Side Request Forgery](https://owasp.org/Top10/A10_2021-Server-Side_Request_Forgery_%28SSRF%29/)
+Typical env:
 
-## Why?
+```bash
+AUTH_ADDRESS=0.0.0.0
+AUTH_PORT=8000
+AUTH_DOMAIN=nanne.casa
+AUTH_COOKIE_EXPIRE=30
+AUTH_CONFIG_FILE=/users.yaml
+```
 
-Alternative auth systems often use Redis and/or PostgreSQL to manage their state and users. But maintaining two databases can be a lot of effort, and if one of them breaks your entire cluster can become locked.
+## users.yaml Format
 
-So we want to have a rock-solid auth server that is stupidly simple. Instead of storing users in a database, we store them in a YAML file. Instead of storing sessions in Redis, we store them in memory. 
+You can run password-only, passkey-only, or mixed.
 
-## Goals
+Example:
 
-- [ ] [Cluster mode](https://github.com/whazor/stupid-auth/issues/4)
-- [ ] [Oauth2](https://github.com/whazor/stupid-auth/issues/5)
-- [ ] [passkeys](https://github.com/whazor/stupid-auth/issues/6)
+```yaml
+server_signing_key: "replace-with-random-64-char-secret"
+users:
+  - username: foo
+    password: "$argon2id$..."
+passkeys:
+  - username: foo
+    credential_id: "..."
+    raw_id: "..."
+    client_data_json: "..."
+    attestation_object: "..."
+    public_key_cose: "..."
+    sign_count: 1
+    signature: "..."
+```
 
+Notes:
+- `users` controls password login availability.
+- `passkeys` controls passkey login availability.
+- If both lists are empty, login page shows a link to `/tutorial`.
 
-## Supported
+## Login Behavior
 
-- [x] nginx ingress
-- [ ] traefik
-- [ ] haproxy
-- [ ] envoy
+- If only password users exist: password form is shown.
+- If only passkeys exist: passkey button is shown.
+- If both exist: both methods are shown.
+- Redirect URL (`rd`) is validated:
+  - allowed: relative paths (`/app`) or absolute URLs on `AUTH_DOMAIN` / subdomains
+  - rejected: other domains (for example `badexample.com` when domain is `example.com`)
 
+## Forward Auth Integration
 
-## Usage
+Expected check endpoint:
+- `GET /auth`
 
-Setup stupid-auth, you might want to first create an empty users k8s secret to start the application.
+Behavior:
+- `200 OK` + header `Remote-User: <username>` when session is valid
+- `401 Unauthorized` when not authenticated
 
-Open `https://stupid-auth.example.com/tutorial` in your browser and follow the instructions.
+Your proxy should redirect unauthenticated users to:
+- `/login?rd=<original-url>`
 
-From the tutorial you will learn how to create a users.yaml file and how to create a secret from it.
+## Kubernetes Hint
+
+If you store config in a Secret:
 
 ```bash
 kubectl create secret generic stupid-auth-users --from-file=users.yaml
 ```
+
+Then mount it and set:
+- `AUTH_CONFIG_FILE=/users.yaml`
 
 ## Environment Variables
 
@@ -66,8 +104,12 @@ kubectl create secret generic stupid-auth-users --from-file=users.yaml
 | --- | --- | --- | --- |
 | `AUTH_ADDRESS` | Runtime app | `0.0.0.0` | Bind address for the HTTP listener. |
 | `AUTH_PORT` | Runtime app | `8000` | Bind port for the HTTP listener. |
-| `AUTH_DOMAIN` | Runtime app | `localhost` | Cookie domain used for auth cookie writes. |
+| `AUTH_DOMAIN` | Runtime app | `localhost` | Allowed redirect domain + cookie domain. |
 | `AUTH_COOKIE_EXPIRE` | Runtime app | `30` | Auth cookie expiration in days. |
-| `AUTH_CONFIG_FILE` | Runtime app | `users.yaml` | Path to the YAML auth config file. |
-| `TAILWIND_CSS` | Runtime app / dev env | `static/tw.css` | Path to prebuilt CSS served at `/public/tw.css`. |
-| `STUPID_AUTH_VERSION` | Dev/deploy env | _(none)_ | Version metadata set by Nix/Tilt wiring. |
+| `AUTH_CONFIG_FILE` | Runtime app | `users.yaml` | Path to YAML auth config. |
+| `TAILWIND_CSS` | Build/runtime wiring | build-provided | Embedded CSS file path used at compile time. |
+| `STUPID_AUTH_VERSION` | Dev/deploy env | _(none)_ | Version metadata from Nix/Tilt wiring. |
+
+## Security Scope
+
+Designed for homelab usage, not enterprise/multi-tenant production.

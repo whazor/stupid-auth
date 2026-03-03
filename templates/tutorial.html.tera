@@ -65,24 +65,21 @@
     };
   }
 
-  function credentialToJSON(value) {
-    if (value instanceof ArrayBuffer) {
-      return bytesToB64url(new Uint8Array(value));
-    }
-    if (value instanceof Uint8Array) {
-      return bytesToB64url(value);
-    }
-    if (Array.isArray(value)) {
-      return value.map(credentialToJSON);
-    }
-    if (value && typeof value === 'object') {
-      const out = {};
-      Object.keys(value).forEach((k) => {
-        out[k] = credentialToJSON(value[k]);
-      });
-      return out;
-    }
-    return value;
+  function bufferToB64url(buf) {
+    return bytesToB64url(new Uint8Array(buf));
+  }
+
+  function credentialToJSON(cred) {
+    const json = {
+      id: cred.id,
+      rawId: bufferToB64url(cred.rawId),
+      type: cred.type,
+      response: {
+        clientDataJSON: bufferToB64url(cred.response.clientDataJSON),
+        attestationObject: bufferToB64url(cred.response.attestationObject),
+      },
+    };
+    return json;
   }
 
   async function registerPasskey() {

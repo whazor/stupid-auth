@@ -32,24 +32,25 @@
     };
   }
 
-  function credentialToJSON(value) {
-    if (value instanceof ArrayBuffer) {
-      return bytesToB64url(new Uint8Array(value));
+  function bufferToB64url(buf) {
+    return bytesToB64url(new Uint8Array(buf));
+  }
+
+  function credentialToJSON(cred) {
+    const json = {
+      id: cred.id,
+      rawId: bufferToB64url(cred.rawId),
+      type: cred.type,
+      response: {
+        clientDataJSON: bufferToB64url(cred.response.clientDataJSON),
+        authenticatorData: bufferToB64url(cred.response.authenticatorData),
+        signature: bufferToB64url(cred.response.signature),
+      },
+    };
+    if (cred.response.userHandle) {
+      json.response.userHandle = bufferToB64url(cred.response.userHandle);
     }
-    if (value instanceof Uint8Array) {
-      return bytesToB64url(value);
-    }
-    if (Array.isArray(value)) {
-      return value.map(credentialToJSON);
-    }
-    if (value && typeof value === 'object') {
-      const out = {};
-      Object.keys(value).forEach((k) => {
-        out[k] = credentialToJSON(value[k]);
-      });
-      return out;
-    }
-    return value;
+    return json;
   }
 
   async function signInWithPasskey() {
