@@ -1,0 +1,20 @@
+on:
+  release:
+    types: [published]
+
+permissions:
+  packages: write
+
+name: publish-docker
+
+jobs:
+  publish-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - run: nix build .#docker
+      - run: nix run .#publish-docker
+        env:
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
