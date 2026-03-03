@@ -2,7 +2,7 @@ use axum::{
     extract::{FromRef, Path, Request, State},
     http::{header::HeaderName, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use axum_extra::extract::cookie::{Cookie, Key, PrivateCookieJar};
@@ -20,16 +20,14 @@ mod tests;
 mod passwd;
 mod routes;
 mod users;
+mod webauthn;
 
-use routes::login::{login, login_post};
-use routes::tutorial::{tutorial, tutorial_genconfig};
+use routes::login::{login, login_finish, login_post, login_start};
+use routes::tutorial::{tutorial, tutorial_genconfig, tutorial_register_finish, tutorial_register_start};
 use users::UserWithSessionID;
 
-static TAILWIND_CSS: Lazy<String> = Lazy::new(|| {
-    let path = std::env::var("TAILWIND_CSS").unwrap_or_else(|_| "static/tw.css".to_string());
-    std::fs::read_to_string(path).unwrap_or_default()
-});
-static TAILWIND_CSS_SHA1: Lazy<String> = Lazy::new(|| digest(&*TAILWIND_CSS));
+static TAILWIND_CSS: &str = include_str!(env!("TAILWIND_CSS"));
+static TAILWIND_CSS_SHA1: Lazy<String> = Lazy::new(|| digest(TAILWIND_CSS));
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct AppConfig {
@@ -179,7 +177,7 @@ async fn public(Path(file): Path<String>) -> Response {
     if file == "tw.css" {
         return (
             [(axum::http::header::CONTENT_TYPE, "text/css; charset=utf-8")],
-            TAILWIND_CSS.clone(),
+            TAILWIND_CSS,
         )
             .into_response();
     }
@@ -214,8 +212,12 @@ pub(crate) fn app() -> Router {
         .route("/", get(index))
         .route("/public/{*file}", get(public))
         .route("/tutorial", get(tutorial).post(tutorial_genconfig))
+        .route("/tutorial/register/start", post(tutorial_register_start))
+        .route("/tutorial/register/finish", post(tutorial_register_finish))
         .route("/auth", get(auth))
         .route("/login", get(login).post(login_post))
+        .route("/login/start", post(login_start))
+        .route("/login/finish", post(login_finish))
         .route("/logout", get(logout))
         .fallback(not_found)
         .with_state(state)

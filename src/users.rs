@@ -10,6 +10,20 @@ pub struct User {
     pub password: String,
 }
 
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+pub struct PasskeyUser {
+    pub username: String,
+    pub credential_id: String,
+    pub raw_id: String,
+    pub client_data_json: String,
+    pub attestation_object: String,
+    #[serde(default)]
+    pub public_key_cose: String,
+    #[serde(default)]
+    pub sign_count: u32,
+    pub signature: String,
+}
+
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct UserWithSessionID {
     pub user: User,
@@ -18,12 +32,17 @@ pub struct UserWithSessionID {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct Users {
+    #[serde(default)]
+    pub server_signing_key: Option<String>,
     pub users: Vec<User>,
+    #[serde(default)]
+    pub passkeys: Vec<PasskeyUser>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum UserError {
     IncorrectUserPassword,
+    InvalidReturnUrl,
     IOError,
     NoUsersYaml,
     InvalidYaml,
@@ -33,6 +52,7 @@ impl UserError {
     pub fn as_query_value(&self) -> &'static str {
         match self {
             UserError::IncorrectUserPassword => "incorrect_user_password",
+            UserError::InvalidReturnUrl => "invalid_return_url",
             UserError::IOError => "io_error",
             UserError::NoUsersYaml => "no_users_yaml",
             UserError::InvalidYaml => "invalid_yaml",
@@ -42,6 +62,7 @@ impl UserError {
     pub fn from_query_value(value: &str) -> Option<Self> {
         match value {
             "incorrect_user_password" => Some(UserError::IncorrectUserPassword),
+            "invalid_return_url" => Some(UserError::InvalidReturnUrl),
             "io_error" => Some(UserError::IOError),
             "no_users_yaml" => Some(UserError::NoUsersYaml),
             "invalid_yaml" => Some(UserError::InvalidYaml),
@@ -55,6 +76,9 @@ impl fmt::Display for UserError {
         match self {
             UserError::IncorrectUserPassword => {
                 write!(f, "Incorrect username or password. Please try again.")
+            }
+            UserError::InvalidReturnUrl => {
+                write!(f, "Invalid return URL. Please use an allowed redirect URL.")
             }
             UserError::IOError => write!(
                 f,
@@ -90,7 +114,11 @@ impl From<serde_yaml::Error> for UserError {
 }
 
 pub fn get_users() -> Result<Users, UserError> {
-    let contents = fs::read_to_string("users.yaml")?;
+    let path = std::env::var("AUTH_CONFIG_FILE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "users.yaml".to_string());
+    let contents = fs::read_to_string(path)?;
     let users: Users = from_str(&contents)?;
     Ok(users)
 }

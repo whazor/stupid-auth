@@ -4,11 +4,18 @@ mod test {
         password_hash::{PasswordHash, PasswordVerifier},
         Argon2,
     };
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     use axum::{
         body::Body,
         http::{header, Request, StatusCode},
     };
+    use ciborium::value::Value as CborValue;
     use http_body_util::BodyExt;
+    use p256::ecdsa::{signature::Signer, Signature, SigningKey};
+    use rand::RngCore;
+    use sha2::{Digest, Sha256};
+    use serial_test::serial;
+    use std::fs;
     use tower::ServiceExt;
 
     #[derive(Debug)]
@@ -108,6 +115,7 @@ mod test {
     }
 
     #[tokio::test]
+    #[serial]
     async fn hello_world() {
         let app = crate::app();
         let response = app
@@ -120,6 +128,7 @@ mod test {
     }
 
     #[tokio::test]
+    #[serial]
     async fn tutorial() {
         let app = crate::app();
         let response = app
@@ -131,6 +140,8 @@ mod test {
 
         let output = response_text(response).await;
         assert!(output.contains("Create your first user by filling in the following fields"));
+        assert!(output.contains("Passkeys require HTTPS (except localhost)"));
+        assert!(output.contains("RP ID"));
 
         let parser = HTMLParser::new(&output);
 
@@ -146,6 +157,27 @@ mod test {
     }
 
     #[tokio::test]
+    #[serial]
+    async fn tutorial_shows_ip_host_warning() {
+        let app = crate::app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/tutorial")
+                    .header(header::HOST, "127.0.0.1:8000")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request succeeded");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let output = response_text(response).await;
+        assert!(output.contains("Using an IP host can break passkey flows"));
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn tutorial_genconfig() {
         let app = crate::app();
         let response = app
@@ -174,6 +206,10 @@ mod test {
         let decoded = decrypt_html_attribute(code);
 
         let config: serde_yaml::Value = serde_yaml::from_str(&decoded).expect("valid yaml");
+        let signing_key = config["server_signing_key"]
+            .as_str()
+            .expect("server signing key");
+        assert_eq!(signing_key.len(), 64);
         let users = config["users"].as_sequence().expect("valid sequence");
         assert_eq!(users.len(), 1);
         let user = &users[0];
@@ -188,6 +224,337 @@ mod test {
     }
 
     #[tokio::test]
+    #[serial]
+    async fn tutorial_register_start_accepts_bootstrap_signing_key() {
+        std::env::remove_var("AUTH_CONFIG_FILE");
+        let app = crate::app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/tutorial/register/start")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"username":"foo","server_signing_key":"abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .expect("request succeeded");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn tutorial_register_start_requires_signing_key_when_bootstrapping() {
+        std::env::remove_var("AUTH_CONFIG_FILE");
+        let app = crate::app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/tutorial/register/start")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"username":"foo"}"#))
+                    .unwrap(),
+            )
+            .await
+            .expect("request succeeded");
+
+        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn login_start_requires_registered_passkey() {
+        std::env::remove_var("AUTH_CONFIG_FILE");
+        let app = crate::app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login/start")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"username":"foo","rd":"/"}"#))
+                    .unwrap(),
+            )
+            .await
+            .expect("request succeeded");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    #[serial]
+    fn webauthn_crypto_registration_and_login_flow() {
+        let rp_id = "localhost";
+        let register_challenge = "register-challenge";
+        let login_challenge = "login-challenge";
+
+        let signing_key = SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
+        let verify_key = signing_key.verifying_key();
+        let pub_point = verify_key.to_encoded_point(false);
+        let x = pub_point.x().expect("x").to_vec();
+        let y = pub_point.y().expect("y").to_vec();
+
+        let cose_key = CborValue::Map(vec![
+            (CborValue::Integer(1_i64.into()), CborValue::Integer(2_i64.into())),
+            (CborValue::Integer(3_i64.into()), CborValue::Integer((-7_i64).into())),
+            (CborValue::Integer((-1_i64).into()), CborValue::Integer(1_i64.into())),
+            (CborValue::Integer((-2_i64).into()), CborValue::Bytes(x)),
+            (CborValue::Integer((-3_i64).into()), CborValue::Bytes(y)),
+        ]);
+        let mut cose_key_bytes = Vec::new();
+        ciborium::ser::into_writer(&cose_key, &mut cose_key_bytes).expect("cose encode");
+
+        let mut credential_id_raw = vec![0_u8; 16];
+        rand::rng().fill_bytes(&mut credential_id_raw);
+        let credential_id = URL_SAFE_NO_PAD.encode(&credential_id_raw);
+
+        let rp_hash = Sha256::digest(rp_id.as_bytes());
+        let mut reg_auth_data = Vec::new();
+        reg_auth_data.extend_from_slice(&rp_hash);
+        reg_auth_data.push(0x41);
+        reg_auth_data.extend_from_slice(&0_u32.to_be_bytes());
+        reg_auth_data.extend_from_slice(&[0_u8; 16]);
+        reg_auth_data.extend_from_slice(&(credential_id_raw.len() as u16).to_be_bytes());
+        reg_auth_data.extend_from_slice(&credential_id_raw);
+        reg_auth_data.extend_from_slice(&cose_key_bytes);
+
+        let attestation_object = CborValue::Map(vec![
+            (
+                CborValue::Text("fmt".to_string()),
+                CborValue::Text("none".to_string()),
+            ),
+            (
+                CborValue::Text("attStmt".to_string()),
+                CborValue::Map(vec![]),
+            ),
+            (
+                CborValue::Text("authData".to_string()),
+                CborValue::Bytes(reg_auth_data),
+            ),
+        ]);
+        let mut attestation_bytes = Vec::new();
+        ciborium::ser::into_writer(&attestation_object, &mut attestation_bytes)
+            .expect("attestation encode");
+
+        let reg_client_data_raw = serde_json::to_vec(&serde_json::json!({
+            "type": "webauthn.create",
+            "challenge": register_challenge,
+            "origin": "https://localhost"
+        }))
+        .expect("client data json");
+        let registration_credential = serde_json::json!({
+            "id": credential_id,
+            "rawId": credential_id,
+            "type": "public-key",
+            "response": {
+                "clientDataJSON": URL_SAFE_NO_PAD.encode(&reg_client_data_raw),
+                "attestationObject": URL_SAFE_NO_PAD.encode(&attestation_bytes)
+            }
+        });
+
+        let registration = crate::webauthn::verify_registration_credential(
+            rp_id,
+            register_challenge,
+            &registration_credential,
+        )
+        .expect("registration verify");
+        assert_eq!(registration.credential_id, credential_id);
+
+        let mut auth_data = Vec::new();
+        auth_data.extend_from_slice(&rp_hash);
+        auth_data.push(0x01);
+        auth_data.extend_from_slice(&1_u32.to_be_bytes());
+
+        let login_client_data_raw = serde_json::to_vec(&serde_json::json!({
+            "type": "webauthn.get",
+            "challenge": login_challenge,
+            "origin": "https://localhost"
+        }))
+        .expect("client data json");
+
+        let mut signed_payload = Vec::new();
+        signed_payload.extend_from_slice(&auth_data);
+        signed_payload.extend_from_slice(&Sha256::digest(&login_client_data_raw));
+
+        let signature: Signature = signing_key.sign(&signed_payload);
+        let assertion = serde_json::json!({
+            "id": credential_id,
+            "type": "public-key",
+            "response": {
+                "clientDataJSON": URL_SAFE_NO_PAD.encode(&login_client_data_raw),
+                "authenticatorData": URL_SAFE_NO_PAD.encode(&auth_data),
+                "signature": URL_SAFE_NO_PAD.encode(signature.to_der().as_bytes()),
+            }
+        });
+
+        let auth = crate::webauthn::verify_authentication_assertion(
+            rp_id,
+            login_challenge,
+            &assertion,
+            &registration.public_key_cose,
+        )
+        .expect("assertion verify");
+        assert_eq!(auth.sign_count, 1);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn passkey_login_flow_returns_redirect_url() {
+        let signing_key = SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
+        let verify_key = signing_key.verifying_key();
+        let pub_point = verify_key.to_encoded_point(false);
+        let x = pub_point.x().expect("x").to_vec();
+        let y = pub_point.y().expect("y").to_vec();
+
+        let cose_key = CborValue::Map(vec![
+            (CborValue::Integer(1_i64.into()), CborValue::Integer(2_i64.into())),
+            (CborValue::Integer(3_i64.into()), CborValue::Integer((-7_i64).into())),
+            (CborValue::Integer((-1_i64).into()), CborValue::Integer(1_i64.into())),
+            (CborValue::Integer((-2_i64).into()), CborValue::Bytes(x)),
+            (CborValue::Integer((-3_i64).into()), CborValue::Bytes(y)),
+        ]);
+        let mut cose_key_bytes = Vec::new();
+        ciborium::ser::into_writer(&cose_key, &mut cose_key_bytes).expect("cose encode");
+        let public_key_cose = URL_SAFE_NO_PAD.encode(&cose_key_bytes);
+
+        let mut credential_id_raw = vec![0_u8; 16];
+        rand::rng().fill_bytes(&mut credential_id_raw);
+        let credential_id = URL_SAFE_NO_PAD.encode(&credential_id_raw);
+
+        let config = crate::users::Users {
+            server_signing_key: Some("test-signing-key".to_string()),
+            users: vec![crate::users::User {
+                username: "foo".to_string(),
+                password: "$argon2id$v=19$m=19456,t=2,p=1$u5kPtGn2a/Py/B6tf26YUQ$GEI4nbr4F74BH/4Bi2Tf7o/r63LXDFclEdgAIsJuXB8".to_string(),
+            }],
+            passkeys: vec![crate::users::PasskeyUser {
+                username: "foo".to_string(),
+                credential_id: credential_id.clone(),
+                raw_id: credential_id.clone(),
+                client_data_json: String::new(),
+                attestation_object: String::new(),
+                public_key_cose,
+                sign_count: 0,
+                signature: "sig".to_string(),
+            }],
+        };
+
+        let temp_path = std::env::temp_dir().join(format!(
+            "stupid-auth-users-{}.yaml",
+            rand::random::<u64>()
+        ));
+        fs::write(
+            &temp_path,
+            serde_yaml::to_string(&config).expect("yaml config"),
+        )
+        .expect("write temp users config");
+
+        let prev = std::env::var("AUTH_CONFIG_FILE").ok();
+        std::env::set_var("AUTH_CONFIG_FILE", temp_path.as_os_str());
+
+        let app = crate::app();
+
+        let start_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login/start")
+                    .header(header::HOST, "localhost:8000")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"username":"foo","rd":"/protected"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .expect("start request succeeded");
+
+        assert_eq!(start_response.status(), StatusCode::OK);
+        let start_body: serde_json::Value =
+            serde_json::from_str(&response_text(start_response).await).expect("start json");
+
+        let token = start_body["token"].as_str().expect("token").to_string();
+        let challenge = start_body["assertionOptions"]["challenge"]
+            .as_str()
+            .expect("challenge");
+        let rp_id = start_body["assertionOptions"]["rpId"]
+            .as_str()
+            .expect("rp id");
+
+        let rp_hash = Sha256::digest(rp_id.as_bytes());
+        let mut auth_data = Vec::new();
+        auth_data.extend_from_slice(&rp_hash);
+        auth_data.push(0x01);
+        auth_data.extend_from_slice(&1_u32.to_be_bytes());
+
+        let login_client_data_raw = serde_json::to_vec(&serde_json::json!({
+            "type": "webauthn.get",
+            "challenge": challenge,
+            "origin": "https://localhost"
+        }))
+        .expect("client data json");
+
+        let mut signed_payload = Vec::new();
+        signed_payload.extend_from_slice(&auth_data);
+        signed_payload.extend_from_slice(&Sha256::digest(&login_client_data_raw));
+        let signature: Signature = signing_key.sign(&signed_payload);
+
+        let finish_payload = serde_json::json!({
+            "token": token,
+            "credential": {
+                "id": credential_id,
+                "rawId": credential_id,
+                "type": "public-key",
+                "response": {
+                    "clientDataJSON": URL_SAFE_NO_PAD.encode(&login_client_data_raw),
+                    "authenticatorData": URL_SAFE_NO_PAD.encode(&auth_data),
+                    "signature": URL_SAFE_NO_PAD.encode(signature.to_der().as_bytes()),
+                }
+            }
+        });
+
+        let finish_response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login/finish")
+                    .header(header::HOST, "localhost:8000")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_string(&finish_payload).expect("finish payload"),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .expect("finish request succeeded");
+
+        assert_eq!(finish_response.status(), StatusCode::OK);
+        let finish_headers = finish_response.headers().clone();
+        let finish_body: serde_json::Value =
+            serde_json::from_str(&response_text(finish_response).await).expect("finish json");
+        assert_eq!(
+            finish_body["redirect_url"].as_str().expect("redirect"),
+            "/protected"
+        );
+        let auth_cookie =
+            extract_cookie(&finish_headers, "stupid_auth_user").expect("auth cookie exists");
+        assert!(auth_cookie.contains("Path=/"));
+
+        if let Some(old) = prev {
+            std::env::set_var("AUTH_CONFIG_FILE", old);
+        } else {
+            std::env::remove_var("AUTH_CONFIG_FILE");
+        }
+        let _ = fs::remove_file(temp_path);
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn login_and_auth() {
         let app = crate::app();
 
@@ -195,7 +562,7 @@ mod test {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/login?rd=https%3A%2F%2Fexample.com")
+                    .uri("/login?rd=%2Fwelcome")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -208,6 +575,7 @@ mod test {
         let output = response_text(response).await;
 
         assert!(output.contains("Login"));
+        assert!(!output.contains("Sign in with passkey"));
         let parser = HTMLParser::new(&output);
         let form = parser.find("form");
         parser.find_child(form.clone(), "input[name=username]");
@@ -218,7 +586,7 @@ mod test {
         let url = decrypt_html_attribute(HTMLParser::get_attribute(form.clone(), "action"));
         let csrf = decrypt_html_attribute(HTMLParser::get_attribute(csrf_field, "value"));
         assert_eq!(csrf.len(), 32);
-        assert_eq!(url, "/login?rd=https%3A%2F%2Fexample.com");
+        assert_eq!(url, "/login?rd=%2Fwelcome");
         let method = HTMLParser::get_attribute(form, "method");
         assert_eq!(method, "POST");
 
@@ -229,7 +597,7 @@ mod test {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/login?rd=https%3A%2F%2Fexample.com")
+                    .uri("/login?rd=%2Fwelcome")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                     .header(header::COOKIE, cookie_pair(&csrf_cookie))
                     .body(Body::from(format!(
@@ -248,9 +616,10 @@ mod test {
             .expect("location header")
             .to_str()
             .expect("location utf8");
-        assert_eq!(location, "https://example.com");
+        assert_eq!(location, "/welcome");
 
         let auth_cookie = extract_cookie(&headers, "stupid_auth_user").expect("auth cookie exists");
+        assert!(auth_cookie.contains("Path=/"));
 
         let response = app
             .oneshot(
@@ -275,6 +644,44 @@ mod test {
     }
 
     #[tokio::test]
+    #[serial]
+    async fn login_shows_tutorial_link_when_no_users() {
+        let empty = crate::users::Users {
+            server_signing_key: None,
+            users: vec![],
+            passkeys: vec![],
+        };
+        let temp_path = std::env::temp_dir().join(format!(
+            "stupid-auth-empty-users-{}.yaml",
+            rand::random::<u64>()
+        ));
+        fs::write(&temp_path, serde_yaml::to_string(&empty).expect("yaml")).expect("write file");
+
+        let prev = std::env::var("AUTH_CONFIG_FILE").ok();
+        std::env::set_var("AUTH_CONFIG_FILE", temp_path.as_os_str());
+
+        let app = crate::app();
+        let response = app
+            .oneshot(Request::builder().uri("/login").body(Body::empty()).unwrap())
+            .await
+            .expect("request succeeded");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response_text(response).await;
+        assert!(body.contains("No users are configured yet."));
+        assert!(body.contains("/tutorial"));
+        assert!(!body.contains("Sign in with passkey"));
+
+        if let Some(old) = prev {
+            std::env::set_var("AUTH_CONFIG_FILE", old);
+        } else {
+            std::env::remove_var("AUTH_CONFIG_FILE");
+        }
+        let _ = fs::remove_file(temp_path);
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn bad_auth() {
         let app = crate::app();
 
@@ -296,5 +703,115 @@ mod test {
             .await
             .expect("request succeeded");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn login_rejects_invalid_return_url_on_page() {
+        let app = crate::app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/login?rd=https%3A%2F%2Fevil.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request succeeded");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_text(response).await;
+        assert!(body.contains("Invalid return URL"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn login_post_rejects_invalid_return_url() {
+        let app = crate::app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login?rd=https%3A%2F%2Fevil.example")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from("username=foo&password=bar&csrf_token=test"))
+                    .unwrap(),
+            )
+            .await
+            .expect("request succeeded");
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get(header::LOCATION)
+            .expect("location")
+            .to_str()
+            .expect("utf8");
+        assert_eq!(location, "/login?error=invalid_return_url");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn login_allows_exact_and_subdomain_redirects_only() {
+        let prev = std::env::var("AUTH_DOMAIN").ok();
+        std::env::set_var("AUTH_DOMAIN", "example.com");
+
+        let app = crate::app();
+
+        let exact = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/login?rd=https%3A%2F%2Fexample.com%2Ffoo")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request succeeded");
+        assert_eq!(exact.status(), StatusCode::OK);
+        let exact_body = response_text(exact).await;
+        assert!(!exact_body.contains("Invalid return URL"));
+        let exact_parser = HTMLParser::new(&exact_body);
+        let exact_form = exact_parser.find("form");
+        let exact_action =
+            decrypt_html_attribute(HTMLParser::get_attribute(exact_form, "action"));
+        assert_eq!(exact_action, "/login?rd=https%3A%2F%2Fexample.com%2Ffoo");
+
+        let sub = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/login?rd=https%3A%2F%2Fbad.example.com%2Ffoo")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request succeeded");
+        assert_eq!(sub.status(), StatusCode::OK);
+        let sub_body = response_text(sub).await;
+        assert!(!sub_body.contains("Invalid return URL"));
+        let sub_parser = HTMLParser::new(&sub_body);
+        let sub_form = sub_parser.find("form");
+        let sub_action = decrypt_html_attribute(HTMLParser::get_attribute(sub_form, "action"));
+        assert_eq!(sub_action, "/login?rd=https%3A%2F%2Fbad.example.com%2Ffoo");
+
+        let bad = app
+            .oneshot(
+                Request::builder()
+                    .uri("/login?rd=https%3A%2F%2Fbadexample.com%2Ffoo")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request succeeded");
+        assert_eq!(bad.status(), StatusCode::OK);
+        let bad_body = response_text(bad).await;
+        assert!(bad_body.contains("Invalid return URL"));
+
+        if let Some(old) = prev {
+            std::env::set_var("AUTH_DOMAIN", old);
+        } else {
+            std::env::remove_var("AUTH_DOMAIN");
+        }
     }
 }
